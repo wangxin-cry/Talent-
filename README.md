@@ -3,7 +3,7 @@
 > 面向企业 HR 团队的智能招聘平台：职位管理、简历解析、人岗匹配、AI 面试辅助、招聘流程自动化、数据分析与成本监控。
 > 核心亮点：**多 Agent 编排（Manager + 子 Agent）+ RAG 知识增强 + 对话式操作入口**。
 
-当前状态：**阶段一 · 工程骨架**（MinIO + PostgreSQL、健康检查、前后端可启动）
+当前状态：**阶段三 · 职位管理（进行中）**：CRUD / 状态机 / 技能词表已完成；AI 生成 JD 仍是本地模板，尚未接真实模型
 
 ---
 
@@ -71,6 +71,35 @@ MinIO 控制台 <http://localhost:9001>（账号见 `.env`）。
 powershell -ExecutionPolicy Bypass -File scripts\dev.ps1
 ```
 
+### 演示账号
+
+```powershell
+python scripts/seed_users.py            # 缺哪个补哪个（幂等）
+python scripts/seed_users.py --reset    # 把演示账号的密码与角色重置为默认值
+```
+
+| 账号 | 默认密码 | 角色 | 说明 |
+|---|---|---|---|
+| `recruiter` | `Talent@2026` | 招聘专员 | 只能访问招聘业务 |
+| `manager` | `Talent@2026` | 用人经理 | 后续可用于面试/评估 |
+| `admin` | `Talent@2026` | 管理员 | 可访问 `GET /api/v1/admin/users` |
+
+> 账号已存在时脚本跳过、不改密码；要让三个账号统一为默认密码，执行一次 `--reset`。
+> 注册页自助注册固定为 `recruiter`，manager / admin 目前通过 seed 脚本或数据库创建。
+
+### 邮箱验证与找回密码
+
+- **开发模式**（`EMAIL_HOST` 为空）：不发信，验证 / 重置链接打印在后端控制台，搜 `[DEV]` 复制即可
+- **真实发信**：`.env` 配置 `EMAIL_HOST=smtp.qq.com`、`EMAIL_PORT=465`、`EMAIL_USE_SSL=true`，密码填邮箱授权码
+- 未验证邮箱不能登录；重置密码链接 30 分钟有效、只能使用一次
+
+### 职位管理
+
+- 菜单「职位」→ 列表、筛选、搜索、新建 / 编辑、发布 / 关闭 / 归档
+- 技能词表需先初始化：`python scripts/seed_skills.py`（44 条，K8s → Kubernetes 归一）
+- AI 生成 JD 当前走本地模板（`LLM_MOCK=true`），返回 `ai_generated=false` 并提示；填入表单可编辑
+- 发布前校验：职位描述、任职要求非空且技能 ≥ 1；状态机非法流转返回 400
+
 ---
 
 ## 二、项目结构
@@ -87,9 +116,9 @@ TalentMatch/
 │   │   │   ├── security.py       #   密码/JWT/PII 加解密
 │   │   │   ├── deps.py           #   会话与 RBAC 依赖
 │   │   │   └── logging.py        #   日志与 PII 脱敏
-│   │   ├── models/               # 数据模型（13 张核心表）
+│   │   ├── models/               # 数据模型（user / auth_token / skill / job）
 │   │   ├── schemas/              # Pydantic 请求/响应模型
-│   │   ├── api/v1/               # 路由（health / 后续业务路由）
+│   │   ├── api/v1/               # 路由（health / auth / admin / jobs / skills）
 │   │   ├── services/             # 业务服务层
 │   │   ├── agents/               # 多 Agent（Manager + 子 Agent）
 │   │   ├── ai/                   # LLM 客户端、抽取、缓存
@@ -111,7 +140,7 @@ TalentMatch/
 | 文档 | 内容 |
 |---|---|
 | [项目设计方案](docs/TalentMatch_项目设计方案_V1.md) | 产品定位、技术选型、架构、多 Agent 编排、十阶段计划 |
-| [数据库设计](docs/TalentMatch_数据库设计_V1.md) | 19 张表逐字段说明、枚举状态机、索引、合规、MinIO 对象存储 |
+| [数据库设计](docs/TalentMatch_数据库设计_V1.md) | 20 张表逐字段说明、枚举状态机、索引、合规、MinIO 对象存储 |
 | [对话式交互与产品画面](docs/TalentMatch_对话式交互与产品画面_V1.md) | 对话入口设计、Manager 如何调工具、界面与卡片 |
 | [界面原型](docs/TalentMatch_界面原型.html) | 可直接打开的 HTML 原型 |
 
@@ -121,15 +150,15 @@ TalentMatch/
 
 - [x] 阶段一：工程骨架（目录、配置、数据库、MinIO 抽象、健康检查）
 - [ ] 阶段一：13 张核心表模型
-- [ ] 阶段二：注册登录与三角色权限
-- [ ] 阶段三：职位管理 + AI 生成 JD
+- [x] 阶段二：注册登录与三角色权限（邮箱验证、找回密码、RBAC、登出吊销）
+- [ ] 阶段三：职位管理 + AI 生成 JD + 技能词表（CRUD/状态机/技能已完成；AI JD 待接真实模型）
 - [ ] 阶段四：简历上传（MinIO）与多格式解析
 - [ ] 阶段五：可解释人岗匹配
 - [ ] 阶段六：候选人流程 + 面试辅助
 - [ ] 阶段七：数据看板 + 成本监控
 - [ ] 阶段八：RAG 知识增强
 - [ ] 阶段九：多 Agent 编排
-- [ ] 阶段九½：对话式入口
+- [ ] 阶段九½：对话式入口（工作台三栏对话界面已按原型落地，真实对话/编排待接入）
 - [ ] 阶段十：部署交付
 
 ---
@@ -142,6 +171,12 @@ python scripts/init_db.py
 
 # 初始化 MinIO 桶
 python scripts/init_minio.py
+
+# 预置演示账号（--reset 重置密码与角色）
+python scripts/seed_users.py
+
+# 初始化技能词表（--reset 更新别名与分类）
+python scripts/seed_skills.py
 
 # 跑测试
 cd backend; pytest -q

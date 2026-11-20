@@ -58,18 +58,49 @@ class Settings(BaseSettings):
     MINIO_SECURE: bool = False
     PRESIGN_EXPIRE_SECONDS: int = 600       # 预签名下载 URL 有效期（10 分钟）
 
+    # ---------- 邮件（注册验证 / 找回密码） ----------
+    # EMAIL_HOST 为空即开发模式：注册用户直接标记已验证，找回密码链接只写日志
+    EMAIL_HOST: str = ""
+    EMAIL_PORT: int = 465
+    EMAIL_USERNAME: str = ""
+    EMAIL_PASSWORD: str = ""
+    EMAIL_USE_TLS: bool = False
+    EMAIL_USE_SSL: bool = True
+    EMAIL_FROM_ADDRESS: str = ""
+    EMAIL_FROM_NAME: str = "TalentMatch"
+    EMAIL_VERIFY_EXPIRE_HOURS: int = 24
+    RESET_TOKEN_EXPIRE_MINUTES: int = 30
+
+    # 前端地址（拼验证 / 重置链接）
+    FRONTEND_BASE_URL: str = "http://localhost:5173"
+
     # ---------- 上传限制 ----------
     MAX_UPLOAD_MB: int = 20
     ALLOWED_UPLOAD_EXTS: str = ".pdf,.doc,.docx,.jpg,.jpeg,.png"
 
     # ---------- LLM ----------
-    LLM_PROVIDER: str = "zhipu"
-    LLM_BASE_URL: str = ""
-    LLM_API_KEY: str = ""
-    LLM_CHAT_MODEL: str = ""
-    LLM_EMBEDDING_MODEL: str = ""
-    LLM_MOCK: bool = True                   # 无 Key 时走 Mock，保证链路可跑
+    # ---------- 大模型（硅基流动，OpenAI 兼容） ----------
+    SILICONFLOW_BASE_URL: str = "https://api.siliconflow.cn/v1"
+    SILICONFLOW_API_KEY: str = ""
+    SILICONFLOW_MAX_RETRIES: int = 3
+
+    # 模型
+    MODEL_AGENT: str = "deepseek-ai/DeepSeek-V4-Flash"
+    MODEL_OCR: str = "deepseek-ai/DeepSeek-OCR"
+    MODEL_NORMALIZE: str = "deepseek-ai/DeepSeek-V4-Flash"
+
+    # 文档转 Markdown（阶段四 OCR 用）
+    OCR_PROMPT: str = "<image>\n<|grounding|>Convert the document to markdown."
+    OCR_DETAIL: str = "high"  # low | high
+    OCR_MAX_TOKENS: int = 4096
+    OCR_TEMPERATURE: float = 0.0
+
+    # 通用开关与超时
+    LLM_MOCK: bool = False  # true 强制走模板（测试用）；正常调用保持 false
     LLM_TIMEOUT_SECONDS: int = 60
+
+    # 兼容旧字段：阶段三旧模板代码仍引用；接完新 jd_writer 后可删
+    LLM_API_KEY: str = ""
 
     # ---------- 成本 ----------
     MONTHLY_BUDGET_CNY: float = 500.0
@@ -93,6 +124,20 @@ class Settings(BaseSettings):
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")
 
+    @property
+    def email_enabled(self) -> bool:
+        """是否配置了 SMTP（为空即开发模式）"""
+        return bool(self.EMAIL_HOST.strip())
+
+    @property
+    def email_from(self) -> str:
+        """发件地址：未单独配置时回落到登录账号"""
+        return self.EMAIL_FROM_ADDRESS.strip() or self.EMAIL_USERNAME.strip()
+
+    @property
+    def ocr_prompt_text(self) -> str:
+        """把 .env 里的字面量 \\n 转成真实换行"""
+        return self.OCR_PROMPT.replace("\\n", "\n")
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

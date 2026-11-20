@@ -1,7 +1,7 @@
 ﻿# TalentMatch 分步实施路线图（V1.0）
 
 > ⚠️ **本文已被取代，仅作历史参考。**
-> 当前有效文档：**《TalentMatch_项目设计方案_V1.md》**（架构与分阶段）、**《TalentMatch_数据库设计_V1.md》**（19 张表）、**《TalentMatch_对话式交互与产品画面_V1.md》**（交互与界面）。
+> 当前有效文档：**《TalentMatch_项目设计方案_V1.md》**（架构与分阶段）、**《TalentMatch_数据库设计_V1.md》**（20 张表）、**《TalentMatch_对话式交互与产品画面_V1.md》**（交互与界面）。
 > 本文写作时尚未确定「从零开发 + MinIO 对象存储」这两个决定，其中技术栈、存储、建表数量相关结论已过时。
 
 > **先看这份会懵：本文是技术附录（Step/M 编号、PRD 追溯、验收口径）。要照着做，请看同目录《TalentMatch_阶段任务计划.md》——9 个阶段，白话描述"干什么 / 做完看到什么 / 不做什么"。**
@@ -311,9 +311,23 @@ AI：OpenAI 兼容协议（DeepSeek / 通义千问），无 Key 时走内置 Moc
 - T2.8 前端 `/login`、`/register`、`/reset` 三页 + 路由守卫（未登录跳登录）+ 角色菜单隐藏。
 - T2.9 `tests/test_auth.py`：6 个用例（重复注册、弱密码、错密码、锁定、刷新、登出后旧 token 失效）。
 
-**产出**：完整账号体系、9 个鉴权接口、3 个页面、RBAC 依赖、6 个测试。
+**实现状态（2026-11-20，精简版已交付）**
 
-**DoD**：6 个用例全绿；登出后旧 access 立即 401；第 5 次错密码 429 且 15 分钟内正确密码也拒；非 Admin 调 `/admin/users` 返回 403；`api_key` 只在创建响应里完整出现一次。
+| 任务 | 状态 | 实际落地 |
+|:--:|:--:|---|
+| T2.1 | ✅ | `schemas/auth.py`；密码 8~64 位且字母+数字（未强制特殊字符） |
+| T2.2 | ✅ | bcrypt、access 30min + refresh 7d；用 `user.token_version` 代替 jti 黑名单，无需额外表 |
+| T2.3 | ⚠️ | 已完成 register / login / refresh / logout / me / reset-request / reset-confirm，另加 verify-email / resend-verification；**change-password、api-key 未做** |
+| T2.4 | ✅ | 落 `user.login_fail_count` / `locked_until`，5 次锁 15 分钟；**命中返回 403 而非 429** |
+| T2.5 | ✅ | `require_roles` 基于数据库角色判断；未单独建 `core/permissions.py`，常量集中在 `models/user.py` |
+| T2.6 | ⚠️ | 仅 `GET /api/v1/admin/users`；禁用/删除/改角色未做 |
+| T2.7 | ❌ | `audit_log` 未建，暂未写审计 |
+| T2.8 | ✅ | 5 个页面（登录/注册/验证/忘记/重置）+ 守卫 + 按角色菜单 |
+| T2.9 | ✅ | 17 个用例，覆盖 6 项并补充 RBAC 越权、角色即时生效、登出后 refresh 失效 |
+
+**产出**：完整账号体系、9 个鉴权接口、5 个页面、RBAC 依赖、17 个测试。
+
+**DoD**：用例全绿；登出后旧 access 立即 401；第 5 次错密码 403 且 15 分钟内正确密码也拒；非 Admin 调 `/admin/users` 返回 403；api_key 功能顺延至后续阶段。
 
 **坑**：JWT 的 `sub` 必须是字符串（UUID 要 `str()`）；SECRET_KEY 不许硬编码；刷新 token 轮换时要同步失效旧的 jti，否则「登出」形同虚设。
 

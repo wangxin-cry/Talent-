@@ -14,7 +14,11 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.v1.admin import router as admin_router
+from app.api.v1.auth import router as auth_router
 from app.api.v1.health import router as health_router
+from app.api.v1.jobs import router as jobs_router
+from app.api.v1.skills import router as skills_router
 from app.core.config import settings
 from app.core.database import close_db, init_db
 from app.core.logging import logger, setup_logging
@@ -102,6 +106,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 # ---------------------------------------------------------------- 路由
 app.include_router(health_router, prefix=settings.API_PREFIX)
+app.include_router(auth_router, prefix=settings.API_PREFIX)
+app.include_router(admin_router, prefix=settings.API_PREFIX)
+app.include_router(jobs_router, prefix=settings.API_PREFIX)
+app.include_router(skills_router, prefix=settings.API_PREFIX)
 
 
 @app.get("/", tags=["系统"], summary="根路径")

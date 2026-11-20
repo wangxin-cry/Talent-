@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, DateTime, func
+from sqlalchemy import BigInteger, DateTime, Integer, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 
@@ -20,7 +20,10 @@ def utcnow() -> datetime:
 class IdMixin:
     """自增主键"""
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # SQLite 只有 INTEGER PRIMARY KEY 才能自增，故用 variant 降级类型
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True
+    )
 
 
 class TimestampMixin:

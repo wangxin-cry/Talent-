@@ -37,3 +37,29 @@ def client() -> TestClient:
 
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def email_capture(monkeypatch):
+    """
+    打开 SMTP 并拦截发信，捕获验证 / 重置链接
+
+    返回 {"verify": [link, ...], "reset": [link, ...]}
+    """
+    from app.core.config import settings
+    from app.services import auth as auth_service
+
+    sent: dict[str, list[str]] = {"verify": [], "reset": []}
+
+    async def fake_verify(to: str, name: str, link: str) -> bool:
+        sent["verify"].append(link)
+        return True
+
+    async def fake_reset(to: str, name: str, link: str) -> bool:
+        sent["reset"].append(link)
+        return True
+
+    monkeypatch.setattr(auth_service, "send_verification_email", fake_verify)
+    monkeypatch.setattr(auth_service, "send_reset_password_email", fake_reset)
+    monkeypatch.setattr(settings, "EMAIL_HOST", "smtp.test")
+    return sent

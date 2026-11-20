@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
+
 import client from '@/api/client'
+import { listJobs } from '@/api/jobs'
+import type { Job } from '@/api/jobs'
+import { useAuthStore } from '@/stores/auth'
 
 interface ComponentStatus {
   ok: boolean
@@ -19,117 +24,601 @@ interface HealthResponse {
   }
 }
 
+const auth = useAuthStore()
+
+// ---------------------------------------------------------------- 概览数据
+const stats = ref({ total: 0, published: 0, draft: 0, closed: 0 })
+const recent = ref<Job[]>([])
+const statsLoading = ref(true)
+
+async function loadOverview() {
+  statsLoading.value = true
+  try {
+    const [all, published, draft, closed] = await Promise.all([
+      listJobs({ page: 1, page_size: 5 }),
+      listJobs({ status: 'published', page: 1, page_size: 1 }),
+      listJobs({ status: 'draft', page: 1, page_size: 1 }),
+      listJobs({ status: 'closed', page: 1, page_size: 1 }),
+    ])
+    recent.value = all.items
+    stats.value = {
+      total: all.total,
+      published: published.total,
+      draft: draft.total,
+      closed: closed.total,
+    }
+  } catch {
+    // 后端未启动时保持空态，不在首页打断用户
+  } finally {
+    statsLoading.value = false
+  }
+}
+
+const kpis = computed(() => [
+  { label: '职位总数', value: stats.value.total, hint: '全部状态', tone: 'indigo' },
+  { label: '招聘中', value: stats.value.published, hint: '对外可见', tone: 'emerald' },
+  { label: '草稿', value: stats.value.draft, hint: '待完善后发布', tone: 'amber' },
+  { label: '已关闭', value: stats.value.closed, hint: '可归档留档', tone: 'violet' },
+])
+
+const STATUS_TEXT: Record<string, string> = {
+  draft: '草稿',
+  pending: '待审批',
+  published: '招聘中',
+  closed: '已关闭',
+  archived: '已归档',
+}
+
+function statusText(status: string): string {
+  return STATUS_TEXT[status] || status
+}
+
+const hour = new Date().getHours()
+const greeting = hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好'
+const dateText = new Intl.DateTimeFormat('zh-CN', {
+  month: 'long',
+  day: 'numeric',
+  weekday: 'long',
+}).format(new Date())
+
+// ---------------------------------------------------------------- 系统状态
 const health = ref<HealthResponse | null>(null)
-const error = ref<string>('')
-const loading = ref(true)
+const healthError = ref('')
+const healthLoading = ref(true)
 
 async function fetchHealth() {
-  loading.value = true
-  error.value = ''
+  healthLoading.value = true
+  healthError.value = ''
   try {
     const { data } = await client.get<HealthResponse>('/healthz')
     health.value = data
   } catch (e: any) {
-    error.value = e?.message ?? '无法连接后端'
+    healthError.value = e?.message ?? '无法连接后端'
   } finally {
-    loading.value = false
+    healthLoading.value = false
   }
 }
 
-onMounted(fetchHealth)
-
-const nextSteps = [
-  '阶段一：MinIO + PostgreSQL 就绪，13 张核心表（进行中）',
-  '阶段二：注册登录与三角色权限',
-  '阶段三：职位管理 + AI 生成 JD',
-  '阶段四：简历上传（MinIO）与多格式解析',
-  '阶段五：可解释的人岗匹配',
-]
+onMounted(() => {
+  void loadOverview()
+  void fetchHealth()
+})
 </script>
 
 <template>
   <div class="home">
-    <section class="hero">
-      <h1>TalentMatch</h1>
-      <p>AI 驱动的企业智能招聘 Agent 平台 · 阶段一骨架</p>
+    <header class="hero">
+      <div class="hero-copy">
+        <div class="eyebrow">DASHBOARD · 招聘概览</div>
+        <h1>{{ greeting }}，{{ auth.user?.name || '招聘伙伴' }}</h1>
+        <p class="sub">
+          {{ dateText }} · 目前 {{ stats.published }} 个职位在招，{{ stats.draft }} 个草稿待完善
+        </p>
+      </div>
+      <div class="hero-actions">
+        <RouterLink class="btn ghost" to="/jobs">查看职位</RouterLink>
+        <RouterLink class="btn primary" to="/jobs?new=1">＋ 新建职位</RouterLink>
+      </div>
+    </header>
+
+    <section class="kpis">
+      <article v-for="item in kpis" :key="item.label" class="kpi" :class="item.tone">
+        <div class="kpi-top">
+          <span class="kpi-label">{{ item.label }}</span>
+          <span class="kpi-dot"></span>
+        </div>
+        <div class="kpi-value">{{ statsLoading ? '—' : item.value }}</div>
+        <div class="kpi-hint">{{ item.hint }}</div>
+      </article>
     </section>
 
-    <section class="status-card">
-      <div class="head">
-        <span class="dot" :class="{ ok: health?.status === 'ok' }"></span>
-        <strong>后端连通性</strong>
-        <button class="refresh" @click="fetchHealth">重新检测</button>
+    <section class="cols">
+      <div class="card">
+        <div class="card-head">
+          <span>最近职位</span>
+          <RouterLink class="link" to="/jobs">全部 →</RouterLink>
+        </div>
+
+        <div v-if="statsLoading" class="state">加载中…</div>
+        <div v-else-if="!recent.length" class="state">
+          还没有职位，<RouterLink class="link" to="/jobs?new=1">创建第一个</RouterLink>
+        </div>
+        <div v-else class="job-list">
+          <RouterLink v-for="job in recent" :key="job.id" class="job-row" to="/jobs">
+            <span class="job-main">
+              <span class="job-title">{{ job.title }}</span>
+              <span class="job-meta">
+                {{ job.department || '未填部门' }} · {{ job.location || '地点待定' }} ·
+                {{ job.skills.length }} 项技能
+              </span>
+            </span>
+            <span class="job-side">
+              <span class="status" :class="job.status">{{ statusText(job.status) }}</span>
+              <span class="arrow">→</span>
+            </span>
+          </RouterLink>
+        </div>
       </div>
 
-      <p v-if="loading" class="muted">检测中…</p>
-      <p v-else-if="error" class="err">连接失败：{{ error }}（确认后端已在 8000 端口启动）</p>
+      <div class="side">
+        <div class="card">
+          <div class="card-head">
+            <span>系统状态</span>
+            <button class="mini" @click="fetchHealth">刷新</button>
+          </div>
+          <p v-if="healthLoading" class="state">检测中…</p>
+          <p v-else-if="healthError" class="state err">连接失败：{{ healthError }}</p>
+          <div v-else-if="health" class="health-rows">
+            <div class="h-row">
+              <span>数据库 · {{ health.components.database.backend }}</span>
+              <span class="pill" :class="health.components.database.ok ? 'ok' : 'bad'">
+                {{ health.components.database.ok ? '正常' : '异常' }}
+              </span>
+            </div>
+            <div class="h-row">
+              <span>对象存储 · {{ health.components.storage.backend }}</span>
+              <span class="pill" :class="health.components.storage.ok ? 'ok' : 'bad'">
+                {{ health.components.storage.ok ? '正常' : '异常' }}
+              </span>
+            </div>
+            <div class="h-row">
+              <span>版本 / 环境</span>
+              <span class="mono">{{ health.version }} · {{ health.env }}</span>
+            </div>
+          </div>
+        </div>
 
-      <div v-else-if="health" class="grid">
-        <div class="item">
-          <div class="label">整体状态</div>
-          <div class="value" :class="health.status">{{ health.status }}</div>
-        </div>
-        <div class="item">
-          <div class="label">版本 / 环境</div>
-          <div class="value">{{ health.version }} · {{ health.env }}</div>
-        </div>
-        <div class="item">
-          <div class="label">数据库（{{ health.components.database.backend }}）</div>
-          <div class="value" :class="{ ok: health.components.database.ok }">
-            {{ health.components.database.ok ? 'ok' : '异常' }}
+        <div class="card">
+          <div class="card-head"><span>快捷操作</span></div>
+          <div class="quick-actions">
+            <RouterLink class="quick-item" to="/jobs?new=1">
+              <span class="qi-icon">＋</span>
+              <span class="qi-text"><strong>新建职位</strong><small>填 JD 后发布</small></span>
+            </RouterLink>
+            <RouterLink class="quick-item" to="/jobs">
+              <span class="qi-icon">≡</span>
+              <span class="qi-text"><strong>职位管理</strong><small>筛选与状态流转</small></span>
+            </RouterLink>
           </div>
-          <div class="detail">{{ health.components.database.detail }}</div>
-        </div>
-        <div class="item">
-          <div class="label">对象存储（{{ health.components.storage.backend }}）</div>
-          <div class="value" :class="{ ok: health.components.storage.ok }">
-            {{ health.components.storage.ok ? 'ok' : '异常' }}
-          </div>
-          <div class="detail">{{ health.components.storage.detail }}</div>
         </div>
       </div>
     </section>
 
-    <section class="steps">
-      <h2>接下来</h2>
-      <ul>
-        <li v-for="s in nextSteps" :key="s">{{ s }}</li>
-      </ul>
-      <p class="muted small">
-        设计文档见项目 docs/ 目录：项目设计方案、数据库设计、对话式交互设计。
-      </p>
-    </section>
+    <footer class="phase">
+      <span class="phase-dot"></span>
+      当前进度：阶段三 · 职位管理已完成，下一步「简历上传与解析」
+    </footer>
   </div>
 </template>
 
 <style scoped>
-.home { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
-.hero h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: -.5px; }
-.hero p { margin: 0; color: var(--muted); }
+.home {
+  max-width: 1240px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
 
-.status-card {
-  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-  padding: 16px 18px; box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+/* Hero */
+.hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 6px 2px 2px;
 }
-.head { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
-.dot { width: 9px; height: 9px; border-radius: 50%; background: #d1d5db; }
-.dot.ok { background: #16a34a; }
-.refresh {
-  margin-left: auto; border: 1px solid var(--line); background: #fff;
-  border-radius: 8px; padding: 4px 11px; font-size: 12.5px; color: var(--muted); cursor: pointer;
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--faint);
+  font-weight: 650;
+  margin-bottom: 6px;
 }
-.refresh:hover { border-color: var(--primary); color: var(--primary); }
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.item { background: #fafbfe; border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; }
-.label { font-size: 12px; color: var(--muted); }
-.value { font-size: 15px; font-weight: 700; margin-top: 4px; }
-.value.ok { color: #16a34a; }
-.value.degraded { color: #d97706; }
-.detail { font-size: 11.5px; color: #9aa1ad; margin-top: 4px; word-break: break-all; }
-.muted { color: var(--muted); }
-.err { color: #dc2626; }
-.small { font-size: 12px; }
-.steps { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
-.steps h2 { margin: 0 0 10px; font-size: 16px; }
-.steps ul { margin: 0; padding-left: 20px; line-height: 2; color: #3b4152; }
+.hero h1 {
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 750;
+}
+.sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.hero-actions {
+  display: flex;
+  gap: 10px;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 17px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: 0.16s;
+}
+.btn.ghost {
+  background: #fff;
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+}
+.btn.ghost:hover {
+  box-shadow: var(--shadow-sm);
+  border-color: #c9cffa;
+}
+.btn.primary {
+  color: #fff;
+  background: linear-gradient(135deg, #5b54ee, #7c5cf0);
+  box-shadow: 0 8px 18px -12px rgba(79, 70, 229, 0.8);
+}
+.btn.primary:hover {
+  background: linear-gradient(135deg, #4f46e5, #6d3ee8);
+  transform: translateY(-1px);
+}
+
+/* KPI */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.kpi {
+  position: relative;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 18px 14px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.18s, transform 0.18s;
+}
+.kpi:hover {
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+.kpi::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, #6366f1, #a78bfa);
+}
+.kpi.emerald::before {
+  background: linear-gradient(90deg, #10b981, #6ee7b7);
+}
+.kpi.amber::before {
+  background: linear-gradient(90deg, #f59e0b, #fcd34d);
+}
+.kpi.violet::before {
+  background: linear-gradient(90deg, #8b5cf6, #c4b5fd);
+}
+.kpi-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.kpi-label {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 650;
+}
+.kpi-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6366f1;
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+}
+.kpi.emerald .kpi-dot {
+  background: #10b981;
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.12);
+}
+.kpi.amber .kpi-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.12);
+}
+.kpi.violet .kpi-dot {
+  background: #8b5cf6;
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.12);
+}
+.kpi-value {
+  margin-top: 8px;
+  font-size: 30px;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.kpi-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+/* 两栏 */
+.cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #fbfcff, #f7f8fd);
+  font-size: 13px;
+  font-weight: 700;
+}
+.link {
+  font-size: 12.5px;
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+}
+.link:hover {
+  text-decoration: underline;
+}
+.state {
+  padding: 22px 18px;
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+.state.err {
+  color: var(--danger);
+}
+
+/* 最近职位 */
+.job-list {
+  display: flex;
+  flex-direction: column;
+}
+.job-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  text-decoration: none;
+  color: inherit;
+  border-bottom: 1px solid #f2f3f8;
+  transition: background 0.14s;
+}
+.job-row:last-child {
+  border-bottom: none;
+}
+.job-row:hover {
+  background: #fafbff;
+}
+.job-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.job-title {
+  font-size: 13.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.job-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+.job-side {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+.status {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  background: #f2f4f7;
+  color: #475467;
+  border: 1px solid transparent;
+}
+.status.published {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: rgba(5, 150, 105, 0.16);
+}
+.status.draft {
+  background: #f2f4f7;
+  color: #475467;
+}
+.status.pending {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: rgba(180, 83, 9, 0.16);
+}
+.status.closed {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: rgba(220, 38, 38, 0.14);
+}
+.status.archived {
+  background: #f7f8fa;
+  color: var(--faint);
+}
+.arrow {
+  color: var(--faint);
+  font-size: 13px;
+}
+
+/* 右栏 */
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.health-rows {
+  padding: 6px 18px 14px;
+}
+.h-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  border-bottom: 1px dashed #eef0f5;
+}
+.h-row:last-child {
+  border-bottom: none;
+}
+.pill {
+  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: 20px;
+  background: #f2f4f7;
+  color: #475467;
+}
+.pill.ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.pill.bad {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.mono {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  font-weight: 550;
+  margin-left: 10px;
+}
+.mini {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 7px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.mini:hover {
+  border-color: #c9cffa;
+  color: var(--primary);
+}
+
+.quick-actions {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.quick-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  text-decoration: none;
+  color: inherit;
+  transition: 0.16s;
+}
+.quick-item:hover {
+  border-color: #c9cffa;
+  background: #fafbff;
+  box-shadow: 0 6px 16px -14px rgba(79, 70, 229, 0.8);
+}
+.qi-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 700;
+}
+.qi-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.qi-text strong {
+  font-size: 13px;
+}
+.qi-text small {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.phase {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, #fafbff, #f5f7ff);
+  border: 1px solid #e7eaf9;
+  border-radius: 11px;
+  font-size: 12.5px;
+  color: #5b6478;
+}
+.phase-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #a78bfa);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.12);
+}
+
+@media (max-width: 1100px) {
+  .kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cols {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 640px) {
+  .hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .kpis {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

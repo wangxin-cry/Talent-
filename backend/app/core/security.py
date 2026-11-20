@@ -36,7 +36,9 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 # ---------------------------------------------------------------- JWT
-def create_access_token(subject: str | int, role: str, expires_minutes: int | None = None) -> str:
+def create_access_token(
+    subject: str | int, role: str, expires_minutes: int | None = None, token_version: int = 0
+) -> str:
     """签发 access token（sub 必须是字符串）"""
     expire = datetime.now(UTC) + timedelta(
         minutes=expires_minutes or settings.ACCESS_TOKEN_EXPIRE_MINUTES
@@ -44,6 +46,7 @@ def create_access_token(subject: str | int, role: str, expires_minutes: int | No
     payload: dict[str, Any] = {
         "sub": str(subject),
         "role": role,
+        "ver": token_version,
         "type": "access",
         "exp": expire,
         "iat": datetime.now(UTC),
@@ -51,11 +54,12 @@ def create_access_token(subject: str | int, role: str, expires_minutes: int | No
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def create_refresh_token(subject: str | int) -> str:
+def create_refresh_token(subject: str | int, token_version: int = 0) -> str:
     """签发 refresh token"""
     expire = datetime.now(UTC) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     payload = {
         "sub": str(subject),
+        "ver": token_version,
         "type": "refresh",
         "exp": expire,
         "iat": datetime.now(UTC),

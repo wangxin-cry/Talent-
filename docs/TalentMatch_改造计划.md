@@ -1,7 +1,7 @@
 ﻿# TalentMatch 改造计划（基于 Resume-Assistant 现有代码）
 
 > ⚠️ **本文已被取代，仅作历史参考。**
-> 当前有效文档：**《TalentMatch_项目设计方案_V1.md》**（架构与分阶段）、**《TalentMatch_数据库设计_V1.md》**（19 张表）、**《TalentMatch_对话式交互与产品画面_V1.md》**（交互与界面）。
+> 当前有效文档：**《TalentMatch_项目设计方案_V1.md》**（架构与分阶段）、**《TalentMatch_数据库设计_V1.md》**（20 张表）、**《TalentMatch_对话式交互与产品画面_V1.md》**（交互与界面）。
 > 本文写作时尚未确定「从零开发 + MinIO 对象存储」这两个决定，其中技术栈、存储、建表数量相关结论已过时。
 
 > 底座：`P1M0U/Resume-Assistant`（MIT），已克隆到项目根目录，`docs/` 是我们的计划文档。
