@@ -456,11 +456,11 @@ async def upload_files(
     return items
 
 # ---------------------------------------------------------------- 后台解析
-async def run_parse_task(file_id: int) -> None:
+async def run_parse_task(file_id: int, trace_id: str | None = None) -> None:
     """BackgroundTasks 入口：独立会话，异常不影响接口响应"""
     async with SessionLocal() as db:
         try:
-            await process_file(db, file_id)
+            await process_file(db, file_id, trace_id=trace_id)
         except Exception as exc:  # noqa: BLE001
             await db.rollback()
             logger.exception(f"简历解析异常 | file_id={file_id} | {exc}")
@@ -479,7 +479,9 @@ async def _mark_failed(db: AsyncSession, file_id: int, reason: str) -> None:
     )
     await db.commit()
 
-async def process_file(db: AsyncSession, file_id: int) -> None:
+async def process_file(
+    db: AsyncSession, file_id: int, trace_id: str | None = None
+) -> None:
     file = await db.get(ResumeFile, file_id)
     if file is None:
         return
@@ -495,7 +497,10 @@ async def process_file(db: AsyncSession, file_id: int) -> None:
         data = get_storage().get(file.object_key)
         text, parser_name, meta = await _extract_content(data, file)
         payload, confidence, extract_meta = await extract_resume(
-            text, job_id=file.applied_job_id, user_id=file.uploaded_by
+            text,
+            job_id=file.applied_job_id,
+            user_id=file.uploaded_by,
+            trace_id=trace_id,
         )
         meta["extract"] = extract_meta
 

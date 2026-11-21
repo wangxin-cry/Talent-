@@ -3,6 +3,21 @@
 
 create_all 之前必须导入全部模型，否则表不会被创建。
 """
+from app.models.agent_trace import (  # noqa: F401
+    AGENT_ANALYTICS,
+    AGENT_INTERVIEW,
+    AGENT_JD_WRITER,
+    AGENT_MANAGER,
+    AGENT_MATCH_ENGINE,
+    AGENT_RESUME_PARSER,
+    AGENT_WORKFLOW,
+    TRACE_DEGRADED,
+    TRACE_FAILED,
+    TRACE_SKIPPED,
+    TRACE_SUCCESS,
+    TRACE_TIMEOUT,
+    AgentTrace,
+)
 from app.models.ai_call import (  # noqa: F401
     AI_STATUS_FAILED,
     AI_STATUS_SKIPPED,
@@ -99,6 +114,10 @@ __all__ = [
     "Candidate", "ResumeFile", "Resume", "AuditLog", "MatchResult",
     "Application", "ApplicationStageHistory", "Notification", "InterviewQuestion",
     "RagChunk", "DOC_RESUME", "DOC_JOB", "DOC_QUESTION", "DOC_TYPE_LABELS",
+    "AgentTrace",
+    "AGENT_MANAGER", "AGENT_JD_WRITER", "AGENT_RESUME_PARSER", "AGENT_MATCH_ENGINE",
+    "AGENT_INTERVIEW", "AGENT_WORKFLOW", "AGENT_ANALYTICS",
+    "TRACE_SUCCESS", "TRACE_FAILED", "TRACE_TIMEOUT", "TRACE_SKIPPED", "TRACE_DEGRADED",
     "AiCall",
     "AI_STATUS_SUCCESS", "AI_STATUS_FAILED", "AI_STATUS_SKIPPED",
     "RF_PENDING", "RF_PARSING", "RF_SUCCESS", "RF_FAILED", "FILE_STATUS_LABELS",

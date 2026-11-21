@@ -62,7 +62,12 @@ async def _load_primary_resumes(
         primary.setdefault(resume.candidate_id, resume)
     return primary
 
-async def match_job(db: AsyncSession, job: Job, use_llm: bool = False) -> MatchRun:
+async def match_job(
+    db: AsyncSession,
+    job: Job,
+    use_llm: bool = False,
+    trace_id: str | None = None,
+) -> MatchRun:
     """
     对一个职位匹配全库候选人。
     - 指纹命中的候选人直接复用
@@ -121,6 +126,7 @@ async def match_job(db: AsyncSession, job: Job, use_llm: bool = False) -> MatchR
             job_id=job.id,
             candidate_id=cand.id,
             user_id=job.created_by,
+            trace_id=trace_id,
         )
 
         detail = {

@@ -100,6 +100,7 @@ async function onLogout() {
         <RouterLink to="/candidates" active-class="active">候选人</RouterLink>
         <RouterLink to="/talent" active-class="active">人才库</RouterLink>
         <RouterLink to="/matching" active-class="active">智能匹配</RouterLink>
+        <RouterLink to="/orchestration" active-class="active">Agent 编排</RouterLink>
         <RouterLink to="/board" active-class="active">流程看板</RouterLink>
         <RouterLink to="/analytics" active-class="active">数据看板</RouterLink>
         <RouterLink to="/costs" active-class="active">成本</RouterLink>

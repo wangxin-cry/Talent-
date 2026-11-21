@@ -78,6 +78,7 @@ async def build_explanation(
     job_id: int | None = None,
     candidate_id: int | None = None,
     user_id: int | None = None,
+    trace_id: str | None = None,
 ) -> dict:
     """
     生成匹配理由。
@@ -110,6 +111,7 @@ async def build_explanation(
             job_id=job_id,
             candidate_id=candidate_id,
             agent="MatchEngineAgent",
+            trace_id=trace_id,
         )
         polished = llm.loads_json(result.text)
         if isinstance(polished, dict):

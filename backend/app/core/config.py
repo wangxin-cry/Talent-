@@ -118,6 +118,11 @@ class Settings(BaseSettings):
     RAG_SIMILAR_RESUMES: int = 3
     RAG_SIMILAR_QUESTIONS: int = 4
 
+    # ---------- 多 Agent 编排（阶段九） ----------
+    ORCH_STEP_TIMEOUT_SECONDS: float = 30.0   # 单个子 Agent 超时（秒），超时按失败降级
+    ORCH_MAX_PARALLEL: int = 5                # 批量解析时的并发上限
+    ORCH_BATCH_LIMIT: int = 50                # 单次批量解析最大文件数
+
     # 兼容旧字段：阶段三旧模板代码仍引用；接完新 jd_writer 后可删
     LLM_API_KEY: str = ""
 

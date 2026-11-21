@@ -137,9 +137,16 @@ async def _primary_resume(db: AsyncSession, candidate_id: int) -> Resume | None:
 async def _load_context(
     db: AsyncSession, application: Application
 ) -> tuple[PrepContext, Resume | None]:
-    job = await db.get(Job, application.job_id)
-    candidate = await db.get(Candidate, application.candidate_id)
-    resume = await _primary_resume(db, application.candidate_id)
+    return await _load_context_for(db, application.job_id, application.candidate_id)
+
+
+async def _load_context_for(
+    db: AsyncSession, job_id: int, candidate_id: int
+) -> tuple[PrepContext, Resume | None]:
+    """按职位 + 候选人装载出题事实（不依赖应聘记录，供编排预览复用）"""
+    job = await db.get(Job, job_id)
+    candidate = await db.get(Candidate, candidate_id)
+    resume = await _primary_resume(db, candidate_id)
 
     ctx = PrepContext()
     if job is not None:
@@ -193,8 +200,8 @@ async def _load_context(
         await db.execute(
             select(MatchResult)
             .where(
-                MatchResult.job_id == application.job_id,
-                MatchResult.candidate_id == application.candidate_id,
+                MatchResult.job_id == job_id,
+                MatchResult.candidate_id == candidate_id,
             )
             .order_by(MatchResult.create_time.desc(), MatchResult.id.desc())
             .limit(1)
@@ -568,7 +575,13 @@ def _from_llm_payload(payload: dict) -> list[QuestionDraft] | None:
 
 
 async def _generate_with_llm(
-    ctx: PrepContext, application: Application, references: list[dict] | None = None
+    ctx: PrepContext,
+    *,
+    user_id: int | None,
+    job_id: int,
+    candidate_id: int,
+    references: list[dict] | None = None,
+    trace_id: str | None = None,
 ) -> list[QuestionDraft] | None:
     if not llm.is_configured():
         return None
@@ -578,10 +591,11 @@ async def _generate_with_llm(
             _build_user_prompt(ctx, references),
             temperature=0.5,
             feature="interview_generate",
-            user_id=application.created_by,
-            job_id=application.job_id,
-            candidate_id=application.candidate_id,
+            user_id=user_id,
+            job_id=job_id,
+            candidate_id=candidate_id,
             agent="InterviewAssistantAgent",
+            trace_id=trace_id,
         )
         payload = llm.loads_json(result.text)
     except llm.LLMError:
@@ -648,6 +662,7 @@ async def generate_questions(
     use_llm: bool = False,
     use_rag: bool | None = None,
     force: bool = False,
+    trace_id: str | None = None,
 ) -> QuestionSetOut:
     """生成 6~8 道题；指纹命中时直接返回缓存"""
     ctx, resume = await _load_context(db, application)
@@ -682,7 +697,14 @@ async def generate_questions(
     source = "template"
     drafts: list[QuestionDraft] | None = None
     if use_llm:
-        drafts = await _generate_with_llm(ctx, application, references)
+        drafts = await _generate_with_llm(
+            ctx,
+            user_id=application.created_by,
+            job_id=application.job_id,
+            candidate_id=application.candidate_id,
+            references=references,
+            trace_id=trace_id,
+        )
         if drafts:
             source = "llm_rag" if references else "llm"
     if not drafts:
@@ -721,3 +743,65 @@ async def generate_questions(
         cached=False,
         rag_sources=references if source == "llm_rag" else [],
     )
+
+
+async def preview_questions(
+    db: AsyncSession,
+    job_id: int,
+    candidate_id: int,
+    *,
+    use_llm: bool = False,
+    user_id: int | None = None,
+    trace_id: str | None = None,
+) -> dict:
+    """
+    编排预览用：不要求存在应聘记录，也不落库。
+
+    直接复用匹配步骤刚写入的 MatchResult 缺口（Context Bus），
+    避免面试 Agent 重新解析/重算上游结果。
+
+    候选人必须存在：否则会拿空上下文生成一批通用模板题，
+    看起来"成功"但毫无意义（编排层也就无法降级提示）。
+    """
+    candidate = await db.get(Candidate, candidate_id)
+    if candidate is None or candidate.is_deleted:
+        raise ValueError(f"候选人不存在：{candidate_id}")
+
+    ctx, _ = await _load_context_for(db, job_id, candidate_id)
+
+    source = "template"
+    drafts: list[QuestionDraft] | None = None
+    if use_llm:
+        drafts = await _generate_with_llm(
+            ctx,
+            user_id=user_id,
+            job_id=job_id,
+            candidate_id=candidate_id,
+            trace_id=trace_id,
+        )
+        if drafts:
+            source = "llm"
+    if not drafts:
+        drafts = build_template_questions(ctx)
+
+    return {
+        "candidate_id": candidate_id,
+        "candidate_name": ctx.candidate_name,
+        "source": source,
+        "total": len(drafts),
+        "match_gaps": {
+            "missing_must": ctx.missing_must,
+            "missing_nice": ctx.missing_nice,
+            "years_gap": ctx.years_gap,
+        },
+        "questions": [
+            {
+                "category": draft.category,
+                "question": draft.question,
+                "looking_for": draft.looking_for,
+                "reference": draft.reference,
+                "follow_up": draft.follow_up,
+            }
+            for draft in drafts
+        ],
+    }

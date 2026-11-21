@@ -21,6 +21,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.health import router as health_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.notifications import router as notifications_router
+from app.api.v1.orchestration import router as orchestration_router
 from app.api.v1.rag import router as rag_router
 from app.api.v1.skills import router as skills_router
 from app.api.v1.candidates import router as candidates_router
@@ -122,6 +123,7 @@ app.include_router(applications_router, prefix=settings.API_PREFIX)
 app.include_router(notifications_router, prefix=settings.API_PREFIX)
 app.include_router(analytics_router, prefix=settings.API_PREFIX)
 app.include_router(rag_router, prefix=settings.API_PREFIX)
+app.include_router(orchestration_router, prefix=settings.API_PREFIX)
 
 
 @app.get("/", tags=["系统"], summary="根路径")

@@ -54,6 +54,12 @@ const router = createRouter({
       component: () => import('@/views/MatchingView.vue'),
     },
     {
+      path: '/orchestration',
+      name: 'orchestration',
+      // 多 Agent 编排：一键评估 + 轨迹面板
+      component: () => import('@/views/OrchestrationView.vue'),
+    },
+    {
       path: '/login',
       name: 'login',
       component: () => import('@/views/LoginView.vue'),

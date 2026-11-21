@@ -310,6 +310,7 @@ async def extract_resume(
     *,
     job_id: int | None = None,
     user_id: int | None = None,
+    trace_id: str | None = None,
 ) -> tuple[dict, dict[str, float], dict]:
     """返回 (结构化 payload, 字段置信度, 元信息)；LLM 失败自动降级为规则抽取"""
     content = (text or "").strip()
@@ -333,6 +334,7 @@ async def extract_resume(
                 user_id=user_id,
                 job_id=job_id,
                 agent="ResumeParserAgent",
+                trace_id=trace_id,
             )
             payload = normalize_payload(llm.loads_json(result.text))
             meta.update({
