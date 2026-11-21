@@ -15,9 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.v1.admin import router as admin_router
+from app.api.v1.applications import router as applications_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.health import router as health_router
 from app.api.v1.jobs import router as jobs_router
+from app.api.v1.notifications import router as notifications_router
 from app.api.v1.skills import router as skills_router
 from app.api.v1.candidates import router as candidates_router
 from app.api.v1.matching import router as matching_router
@@ -114,6 +116,8 @@ app.include_router(admin_router, prefix=settings.API_PREFIX)
 app.include_router(jobs_router, prefix=settings.API_PREFIX)
 app.include_router(skills_router, prefix=settings.API_PREFIX)
 app.include_router(matching_router, prefix=settings.API_PREFIX)
+app.include_router(applications_router, prefix=settings.API_PREFIX)
+app.include_router(notifications_router, prefix=settings.API_PREFIX)
 
 
 @app.get("/", tags=["系统"], summary="根路径")

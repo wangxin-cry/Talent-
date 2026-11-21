@@ -12,8 +12,13 @@ const router = createRouter({
     {
       path: '/board',
       name: 'board',
-      // 看板：当前为 KPI 概览占位，阶段七补齐漏斗/周期/渠道
-      component: () => import('@/views/HomeView.vue'),
+      // 流程看板：按状态分列、拖拽流转、时间线
+      component: () => import('@/views/BoardView.vue'),
+    },
+    {
+      path: '/applications/:id/prep',
+      name: 'interview-prep',
+      component: () => import('@/views/InterviewPrepView.vue'),
     },
     {
       path: '/jobs',
