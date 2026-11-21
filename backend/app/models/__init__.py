@@ -38,6 +38,7 @@ from app.models.job import (  # noqa: F401
     WORK_MODES,
     Job,
 )
+from app.models.match_result import MatchResult  # noqa: F401
 from app.models.skill import (  # noqa: F401
     CATEGORY_DATABASE,
     CATEGORY_FRAMEWORK,
@@ -59,7 +60,7 @@ from app.models.user import (  # noqa: F401
 __all__ = [
     "IdMixin", "TimestampMixin", "CompanyScopedMixin", "utcnow",
     "User", "AuthToken", "Skill", "Job",
-    "Candidate", "ResumeFile", "Resume", "AuditLog",
+    "Candidate", "ResumeFile", "Resume", "AuditLog", "MatchResult",
     "RF_PENDING", "RF_PARSING", "RF_SUCCESS", "RF_FAILED", "FILE_STATUS_LABELS",
     "STATUS_DRAFT", "STATUS_PENDING", "STATUS_PUBLISHED", "STATUS_CLOSED", "STATUS_ARCHIVED",
     "JD_SOURCE_MANUAL", "JD_SOURCE_AI", "WORK_MODES", "EMPLOYMENT_TYPES", "EDUCATION_LEVELS",

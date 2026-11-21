@@ -20,6 +20,7 @@ from app.api.v1.health import router as health_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.skills import router as skills_router
 from app.api.v1.candidates import router as candidates_router
+from app.api.v1.matching import router as matching_router
 from app.core.config import settings
 from app.core.database import close_db, init_db
 from app.core.logging import logger, setup_logging
@@ -112,6 +113,7 @@ app.include_router(auth_router, prefix=settings.API_PREFIX)
 app.include_router(admin_router, prefix=settings.API_PREFIX)
 app.include_router(jobs_router, prefix=settings.API_PREFIX)
 app.include_router(skills_router, prefix=settings.API_PREFIX)
+app.include_router(matching_router, prefix=settings.API_PREFIX)
 
 
 @app.get("/", tags=["系统"], summary="根路径")

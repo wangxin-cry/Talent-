@@ -37,6 +37,7 @@ async function onLogout() {
         <RouterLink to="/" exact-active-class="active">工作台</RouterLink>
         <RouterLink to="/jobs" active-class="active">职位</RouterLink>
         <RouterLink to="/candidates" active-class="active">候选人</RouterLink>
+        <RouterLink to="/matching" active-class="active">智能匹配</RouterLink>
         <RouterLink to="/board" active-class="active">看板</RouterLink>
         <span class="disabled">成本</span>
         <template v-if="auth.isAdmin">
