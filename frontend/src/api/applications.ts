@@ -87,11 +87,21 @@ export interface Question {
   source: string
 }
 
+export interface RagSource {
+  type: string
+  id: number
+  title: string
+  score: number
+  snippet: string
+}
+
 export interface QuestionSet {
   application_id: number
   cached: boolean
   source: string
   total: number
+  rag_used: boolean
+  rag_sources: RagSource[]
   questions: Question[]
 }
 
@@ -152,9 +162,16 @@ export async function listQuestions(id: number): Promise<QuestionSet> {
   return data
 }
 
-export async function generateQuestions(id: number, useLlm = true): Promise<QuestionSet> {
+export async function generateQuestions(
+  id: number,
+  useLlm = true,
+  useRag: boolean | null = null,
+  force = false,
+): Promise<QuestionSet> {
   const { data } = await client.post<QuestionSet>(`/applications/${id}/questions`, {
     use_llm: useLlm,
+    use_rag: useRag,
+    force,
   })
   return data
 }

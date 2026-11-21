@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import * as appApi from '@/api/applications'
-import type { ApplicationDetail, Question } from '@/api/applications'
+import type { ApplicationDetail, Question, RagSource } from '@/api/applications'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,6 +13,9 @@ const applicationId = Number(route.params.id)
 const detail = ref<ApplicationDetail | null>(null)
 const questions = ref<Question[]>([])
 const questionMeta = ref<{ cached: boolean; source: string } | null>(null)
+const ragSources = ref<RagSource[]>([])
+const ragUsed = ref(false)
+const useRag = ref(true)
 const loading = ref(false)
 const generating = ref(false)
 
@@ -47,6 +50,18 @@ type TagType = 'primary' | 'success' | 'danger' | 'warning' | 'info'
 
 const match = computed(() => detail.value?.match || null)
 
+const sourceLabel = computed(() => {
+  const source = questionMeta.value?.source
+  if (source === 'llm_rag') return 'AI 生成 · 知识库增强'
+  if (source === 'llm') return 'LLM 生成'
+  if (source === 'template') return '模板生成'
+  return ''
+})
+
+const sourceTagType = computed(() =>
+  questionMeta.value?.source === 'template' ? 'warning' : 'success',
+)
+
 function categoryLabel(value: string): string {
   return CATEGORY_LABELS[value] || value
 }
@@ -75,6 +90,8 @@ async function load() {
     detail.value = data
     questions.value = questionSet.questions
     questionMeta.value = { cached: questionSet.cached, source: questionSet.source }
+    ragSources.value = questionSet.rag_sources || []
+    ragUsed.value = questionSet.rag_used
   } catch (e: any) {
     ElMessage.error(e.message || '加载面试准备信息失败')
   } finally {
@@ -85,11 +102,15 @@ async function load() {
 async function generate(useLlm: boolean) {
   generating.value = true
   try {
-    const data = await appApi.generateQuestions(applicationId, useLlm)
+    const data = await appApi.generateQuestions(applicationId, useLlm, useRag.value)
     questions.value = data.questions
     questionMeta.value = { cached: data.cached, source: data.source }
+    ragSources.value = data.rag_sources || []
+    ragUsed.value = data.rag_used
     if (data.cached) {
       ElMessage.success('指纹未变化，已读取缓存题目（不重复计费）')
+    } else if (data.source === 'llm_rag') {
+      ElMessage.success(`AI 已结合知识库生成 ${data.total} 题`)
     } else if (data.source === 'llm') {
       ElMessage.success(`AI 生成完成，共 ${data.total} 题`)
     } else {
@@ -201,15 +222,35 @@ onMounted(load)
             </p>
           </div>
           <div class="actions">
+            <el-switch v-model="useRag" active-text="知识库增强" />
             <el-tag v-if="questionMeta?.cached && questions.length" type="info" effect="plain">缓存命中</el-tag>
-            <el-tag v-if="questions.length" :type="questionMeta?.source === 'llm' ? 'success' : 'warning'" effect="plain">
-              {{ questionMeta?.source === 'llm' ? 'LLM 生成' : '模板生成' }}
+            <el-tag v-if="questions.length" :type="sourceTagType" effect="plain">
+              {{ sourceLabel }}
             </el-tag>
             <el-button v-if="questions.length" @click="copyAll">复制全部</el-button>
             <el-button :loading="generating" @click="generate(false)">模板生成</el-button>
             <el-button type="primary" :loading="generating" @click="generate(true)">AI 生成</el-button>
           </div>
         </div>
+
+        <section v-if="ragUsed && ragSources.length" class="rag-panel">
+          <div class="rag-head">
+            <strong>知识库参考</strong>
+            <span>来自相似候选人简历与历史面试题，仅供出题灵感</span>
+          </div>
+          <div class="rag-list">
+            <div v-for="(source, index) in ragSources" :key="`${source.type}-${source.id}-${index}`" class="rag-item">
+              <div class="rag-title">
+                <el-tag size="small" :type="source.type === 'resume' ? 'primary' : 'info'" effect="plain">
+                  {{ source.type === 'resume' ? '简历' : '历史题' }}
+                </el-tag>
+                <span>{{ source.title }}</span>
+                <span class="rag-score">{{ Math.round(source.score * 100) }}%</span>
+              </div>
+              <p class="rag-snippet">{{ source.snippet }}</p>
+            </div>
+          </div>
+        </section>
 
         <div v-if="questions.length" class="question-list">
           <article v-for="(item, index) in questions" :key="item.id" class="question">
@@ -437,6 +478,57 @@ onMounted(load)
   min-width: 38px;
   font-weight: 650;
   margin-right: 6px;
+}
+.rag-panel {
+  margin-top: 16px;
+  border: 1px solid #dbe3ff;
+  background: #f7f9ff;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.rag-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.rag-head strong {
+  font-size: 13.5px;
+}
+.rag-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.rag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rag-item {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px 11px;
+}
+.rag-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.rag-score {
+  margin-left: auto;
+  color: var(--primary);
+  font-weight: 700;
+}
+.rag-snippet {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
 }
 @media (max-width: 960px) {
   .layout {

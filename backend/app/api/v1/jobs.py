@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import CurrentUser, DbSession
@@ -22,6 +22,7 @@ from app.schemas.job import (
     JobUpdateIn,
 )
 from app.services import job as job_service
+from app.services import rag
 from app.services.jd_writer import generate_jd
 from app.services.job import STATUS_LABELS
 from app.services.skills import load_skill_map
@@ -81,8 +82,11 @@ async def list_jobs_api(
 
 
 @router.post("", response_model=JobOut, status_code=status.HTTP_201_CREATED, summary="创建职位")
-async def create_job_api(data: JobCreateIn, db: DbSession, user: CurrentUser) -> JobOut:
+async def create_job_api(
+    data: JobCreateIn, db: DbSession, user: CurrentUser, background: BackgroundTasks
+) -> JobOut:
     job = await job_service.create_job(db, data, user.id)
+    background.add_task(rag.index_job_task, job.id)
     return await _to_out(db, job)
 
 
@@ -94,15 +98,22 @@ async def get_job_api(job_id: int, db: DbSession, _: CurrentUser) -> JobOut:
 
 @router.put("/{job_id}", response_model=JobOut, summary="编辑职位")
 async def update_job_api(
-    job_id: int, data: JobUpdateIn, db: DbSession, _: CurrentUser
+    job_id: int,
+    data: JobUpdateIn,
+    db: DbSession,
+    _: CurrentUser,
+    background: BackgroundTasks,
 ) -> JobOut:
     job = await job_service.get_job_or_404(db, job_id)
     job = await job_service.update_job(db, job, data)
+    background.add_task(rag.index_job_task, job.id)
     return await _to_out(db, job)
 
 
 @router.post("/{job_id}/publish", response_model=JobOut, summary="发布职位（manager/admin）")
-async def publish_job_api(job_id: int, db: DbSession, user: CurrentUser) -> JobOut:
+async def publish_job_api(
+    job_id: int, db: DbSession, user: CurrentUser, background: BackgroundTasks
+) -> JobOut:
     if user.role not in REVIEW_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -110,6 +121,7 @@ async def publish_job_api(job_id: int, db: DbSession, user: CurrentUser) -> JobO
         )
     job = await job_service.get_job_or_404(db, job_id)
     job = await job_service.publish_job(db, job, user.id)
+    background.add_task(rag.index_job_task, job.id)
     return await _to_out(db, job)
 
 @router.post("/{job_id}/submit", response_model=JobOut, summary="提交审批")
@@ -119,10 +131,13 @@ async def submit_job_api(job_id: int, db: DbSession, _: CurrentUser) -> JobOut:
     return await _to_out(db, job)
 
 @router.post("/{job_id}/approve", response_model=JobOut, summary="审批通过")
-async def approve_job_api(job_id: int, db: DbSession, user: CurrentUser) -> JobOut:
+async def approve_job_api(
+    job_id: int, db: DbSession, user: CurrentUser, background: BackgroundTasks
+) -> JobOut:
     _require_reviewer(user)
     job = await job_service.get_job_or_404(db, job_id)
     job = await job_service.approve_job(db, job, user.id)
+    background.add_task(rag.index_job_task, job.id)
     return await _to_out(db, job)
 
 @router.post("/{job_id}/reject", response_model=JobOut, summary="驳回职位")

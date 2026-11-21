@@ -12,6 +12,8 @@ MODEL_PRICES: dict[str, tuple[float, float]] = {
     "deepseek-ai/DeepSeek-V4-Flash": (0.001, 0.002),
     "deepseek-ai/DeepSeek-OCR": (0.001, 0.002),
     "Qwen/Qwen2.5-VL-72B-Instruct": (0.004, 0.012),
+    # Embedding：SiliconFlow 的 bge-m3 当前免费；如供应商调价在此更新
+    "BAAI/bge-m3": (0.0, 0.0),
 }
 
 

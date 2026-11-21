@@ -1,7 +1,7 @@
 """招聘流程接口：看板、流转、时间线、面试题"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, BackgroundTasks, Query, status
 
 from app.core.deps import CurrentUser, DbSession
 from app.schemas.application import (
@@ -15,6 +15,7 @@ from app.schemas.application import (
 )
 from app.services import interview_questions as question_svc
 from app.services import pipeline
+from app.services import rag
 from app.services.job import get_job_or_404
 
 router = APIRouter(prefix="/applications", tags=["招聘流程"])
@@ -98,6 +99,15 @@ async def generate_questions_api(
     payload: QuestionGenerateIn,
     db: DbSession,
     _: CurrentUser,
+    background: BackgroundTasks,
 ) -> QuestionSetOut:
     application = await pipeline.get_application_or_404(db, application_id)
-    return await question_svc.generate_questions(db, application, use_llm=payload.use_llm)
+    result = await question_svc.generate_questions(
+        db,
+        application,
+        use_llm=payload.use_llm,
+        use_rag=payload.use_rag,
+        force=payload.force,
+    )
+    background.add_task(rag.index_questions_task, application.id)
+    return result

@@ -59,6 +59,13 @@ from app.models.job import (  # noqa: F401
     Job,
 )
 from app.models.match_result import MatchResult  # noqa: F401
+from app.models.rag_chunk import (  # noqa: F401
+    DOC_JOB,
+    DOC_QUESTION,
+    DOC_RESUME,
+    DOC_TYPE_LABELS,
+    RagChunk,
+)
 from app.models.notification import (  # noqa: F401
     NOTIF_CHANNEL_EMAIL,
     NOTIF_CHANNEL_INAPP,
@@ -91,6 +98,7 @@ __all__ = [
     "User", "AuthToken", "Skill", "Job",
     "Candidate", "ResumeFile", "Resume", "AuditLog", "MatchResult",
     "Application", "ApplicationStageHistory", "Notification", "InterviewQuestion",
+    "RagChunk", "DOC_RESUME", "DOC_JOB", "DOC_QUESTION", "DOC_TYPE_LABELS",
     "AiCall",
     "AI_STATUS_SUCCESS", "AI_STATUS_FAILED", "AI_STATUS_SKIPPED",
     "RF_PENDING", "RF_PARSING", "RF_SUCCESS", "RF_FAILED", "FILE_STATUS_LABELS",

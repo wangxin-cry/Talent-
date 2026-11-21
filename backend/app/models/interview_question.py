@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Index, Integer, String, Text
+from sqlalchemy import BigInteger, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -35,5 +35,10 @@ class InterviewQuestion(IdMixin, TimestampMixin, CompanyScopedMixin, Base):
     follow_up: Mapped[str | None] = mapped_column(Text, comment="追问")
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="展示顺序")
     source: Mapped[str] = mapped_column(String(20), default="template", nullable=False,
-                                         comment="llm/template")
+                                         comment="llm / llm_rag / template")
     fingerprint: Mapped[str | None] = mapped_column(String(64), comment="生成指纹，用于缓存")
+    # 生成时使用的知识库参考来源；同一批题目每行存同一份，
+    # 便于页面刷新或命中缓存时仍能展示"参考了哪些相似候选人/历史题"。
+    rag_sources: Mapped[list] = mapped_column(
+        JSON, default=list, nullable=False, comment="RAG 参考来源列表"
+    )

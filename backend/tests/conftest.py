@@ -25,6 +25,11 @@ os.environ["STORAGE_BACKEND"] = "local"
 os.environ["LOCAL_STORAGE_DIR"] = str(_TMP / "uploads")
 os.environ["SECRET_KEY"] = "test-secret-key"
 os.environ["LLM_MOCK"] = "true"
+# RAG 默认关闭：测试不应联网调用真实 embedding；需要时由 test_rag 自行打开
+os.environ["RAG_ENABLED"] = "false"
+os.environ["RAG_INDEX_ENABLED"] = "false"
+os.environ["VECTOR_BACKEND"] = "numpy"
+os.environ["FAISS_DIR"] = str(_TMP / "faiss")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

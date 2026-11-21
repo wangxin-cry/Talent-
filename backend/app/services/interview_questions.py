@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.security import sha256_hex
 from app.models.application import Application
 from app.models.candidate import Candidate, Resume
@@ -25,10 +26,11 @@ from app.models.job import Job
 from app.models.match_result import MatchResult
 from app.schemas.application import QuestionOut, QuestionSetOut
 from app.services import llm
+from app.services import rag
 from app.services.match_features import extract_features
 from app.services.skills import load_skill_map
 
-QUESTION_VERSION = "iq-v1"
+QUESTION_VERSION = "iq-v2"
 MIN_QUESTIONS = 6
 MAX_QUESTIONS = 8
 MIN_EVIDENCE = 5
@@ -493,12 +495,13 @@ SYSTEM_PROMPT = """你是资深技术面试官。请根据职位要求与候选�
 硬性要求：
 1. 每题必须引用简历中的具体项目、公司、技能，或明确的岗位缺口，禁止"请自我介绍"类通用题；
 2. 至少 5 题的 reference 字段以「项目：」「技能：」「经历：」「任职：」「缺口：」之一开头；
-3. 只输出 JSON，不要任何解释，格式：
+3. 若提供了「参考材料」，只把它当作出题灵感，禁止照抄原文，禁止编造材料中没有的事实；
+4. 只输出 JSON，不要任何解释，格式：
 {"questions":[{"category":"project|skill|gap|experience|scenario|motivation","question":"题目","looking_for":"考察点","reference":"引用依据","follow_up":"追问"}]}
 """
 
 
-def _build_user_prompt(ctx: PrepContext) -> str:
+def _build_user_prompt(ctx: PrepContext, references: list[dict] | None = None) -> str:
     facts = {
         "职位": ctx.job_title,
         "必备技能": ctx.must_skills,
@@ -522,6 +525,15 @@ def _build_user_prompt(ctx: PrepContext) -> str:
             "年限差": ctx.years_gap,
         },
     }
+    if references:
+        facts["参考材料（仅作灵感，禁止照抄）"] = [
+            {
+                "类型": item.get("type"),
+                "标题": item.get("title"),
+                "片段": _snippet(item.get("snippet"), 260),
+            }
+            for item in references[:8]
+        ]
     return json.dumps(facts, ensure_ascii=False, default=str)
 
 
@@ -556,14 +568,14 @@ def _from_llm_payload(payload: dict) -> list[QuestionDraft] | None:
 
 
 async def _generate_with_llm(
-    ctx: PrepContext, application: Application
+    ctx: PrepContext, application: Application, references: list[dict] | None = None
 ) -> list[QuestionDraft] | None:
     if not llm.is_configured():
         return None
     try:
         result = await llm.chat_json(
             SYSTEM_PROMPT,
-            _build_user_prompt(ctx),
+            _build_user_prompt(ctx, references),
             temperature=0.5,
             feature="interview_generate",
             user_id=application.created_by,
@@ -577,7 +589,9 @@ async def _generate_with_llm(
     return _from_llm_payload(payload)
 
 
-def fingerprint_of(job: Job, resume: Resume | None, ctx: PrepContext) -> str:
+def fingerprint_of(
+    job: Job, resume: Resume | None, ctx: PrepContext, *, rag_enabled: bool = False
+) -> str:
     raw = "|".join(
         [
             QUESTION_VERSION,
@@ -587,6 +601,7 @@ def fingerprint_of(job: Job, resume: Resume | None, ctx: PrepContext) -> str:
             ",".join(ctx.matched_must),
             str(ctx.years_gap),
             str(ctx.jd_min_years),
+            f"rag:{1 if rag_enabled else 0}",
         ]
     )
     return sha256_hex(raw)
@@ -597,12 +612,19 @@ def _to_set(
     rows: list[InterviewQuestion],
     *,
     cached: bool,
+    rag_sources: list[dict] | None = None,
 ) -> QuestionSetOut:
+    source = rows[0].source if rows else "none"
+    # 从库里还原参考来源：命中缓存或刷新页面时也要能看到"参考了什么"
+    if rag_sources is None and rows:
+        rag_sources = list((rows[0].rag_sources or []))
     return QuestionSetOut(
         application_id=application_id,
         cached=cached,
-        source=rows[0].source if rows else "none",
+        source=source,
         total=len(rows),
+        rag_used=source == "llm_rag",
+        rag_sources=rag_sources or [],
         questions=[QuestionOut.model_validate(row) for row in rows],
     )
 
@@ -620,7 +642,12 @@ async def list_questions(db: AsyncSession, application: Application) -> Question
 
 
 async def generate_questions(
-    db: AsyncSession, application: Application, *, use_llm: bool = False
+    db: AsyncSession,
+    application: Application,
+    *,
+    use_llm: bool = False,
+    use_rag: bool | None = None,
+    force: bool = False,
 ) -> QuestionSetOut:
     """生成 6~8 道题；指纹命中时直接返回缓存"""
     ctx, resume = await _load_context(db, application)
@@ -628,26 +655,36 @@ async def generate_questions(
     if job is None:
         return QuestionSetOut(application_id=application.id)
 
-    fingerprint = fingerprint_of(job, resume, ctx)
-    cached_rows = (
-        await db.execute(
-            select(InterviewQuestion)
-            .where(
-                InterviewQuestion.application_id == application.id,
-                InterviewQuestion.fingerprint == fingerprint,
+    effective_rag = (
+        settings.RAG_ENABLED if use_rag is None else bool(use_rag and settings.RAG_ENABLED)
+    )
+    fingerprint = fingerprint_of(job, resume, ctx, rag_enabled=effective_rag)
+
+    if not force:
+        cached_rows = (
+            await db.execute(
+                select(InterviewQuestion)
+                .where(
+                    InterviewQuestion.application_id == application.id,
+                    InterviewQuestion.fingerprint == fingerprint,
+                )
+                .order_by(InterviewQuestion.sort_order.asc(), InterviewQuestion.id.asc())
             )
-            .order_by(InterviewQuestion.sort_order.asc(), InterviewQuestion.id.asc())
-        )
-    ).scalars().all()
-    if cached_rows:
-        return _to_set(application.id, list(cached_rows), cached=True)
+        ).scalars().all()
+        if cached_rows:
+            return _to_set(application.id, list(cached_rows), cached=True)
+
+    references: list[dict] = []
+    if effective_rag and use_llm:
+        candidate = await db.get(Candidate, application.candidate_id)
+        references = await rag.retrieve_for_interview(db, application, job, candidate)
 
     source = "template"
     drafts: list[QuestionDraft] | None = None
     if use_llm:
-        drafts = await _generate_with_llm(ctx, application)
+        drafts = await _generate_with_llm(ctx, application, references)
         if drafts:
-            source = "llm"
+            source = "llm_rag" if references else "llm"
     if not drafts:
         drafts = build_template_questions(ctx)
 
@@ -671,10 +708,16 @@ async def generate_questions(
             source=source,
             fingerprint=fingerprint,
             company_id=1,
+            rag_sources=references if source == "llm_rag" else [],
         )
         db.add(row)
         rows.append(row)
     await db.commit()
     for row in rows:
         await db.refresh(row)
-    return _to_set(application.id, rows, cached=False)
+    return _to_set(
+        application.id,
+        rows,
+        cached=False,
+        rag_sources=references if source == "llm_rag" else [],
+    )

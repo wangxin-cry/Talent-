@@ -43,6 +43,12 @@ const router = createRouter({
       component: () => import('@/views/CandidatesView.vue'),
     },
     {
+      path: '/talent',
+      name: 'talent',
+      // 人才库：语义搜索相似简历
+      component: () => import('@/views/TalentView.vue'),
+    },
+    {
       path: '/matching',
       name: 'matching',
       component: () => import('@/views/MatchingView.vue'),

@@ -547,6 +547,13 @@ async def process_file(db: AsyncSession, file_id: int) -> None:
         )
         await db.commit()
 
+        # 解析成功后再写向量索引；失败只记日志，不影响建档结果
+        try:
+            from app.services import rag
+            await rag.index_resume(db, candidate.id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("简历向量索引失败 candidate_id={}：{}", candidate.id, exc)
+
     except ParseError as exc:
         # 乱码 / 扫描件 / 损坏文件：只落失败状态，提示手动录入，不抛 500
         file.status = RF_FAILED

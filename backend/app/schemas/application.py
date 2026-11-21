@@ -21,6 +21,10 @@ class ApplicationTransitionIn(BaseModel):
 
 class QuestionGenerateIn(BaseModel):
     use_llm: bool = False
+    use_rag: bool | None = Field(
+        default=None, description="是否用知识库增强；空则跟随全局 RAG 开关"
+    )
+    force: bool = Field(default=False, description="忽略缓存重新生成")
 
 
 # ---------------------------------------------------------------- 看板
@@ -124,6 +128,8 @@ class QuestionSetOut(BaseModel):
     cached: bool = False
     source: str = "none"
     total: int = 0
+    rag_used: bool = False
+    rag_sources: list[dict] = []
     questions: list[QuestionOut] = []
 
 

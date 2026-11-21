@@ -103,6 +103,21 @@ class Settings(BaseSettings):
     LLM_MOCK: bool = False  # true 强制走模板（测试用）；正常调用保持 false
     LLM_TIMEOUT_SECONDS: int = 60
 
+    # ---------- RAG 知识增强（阶段八） ----------
+    RAG_ENABLED: bool = True                # 检索总开关
+    RAG_INDEX_ENABLED: bool = True          # 写入开关（关掉可只读省钱）
+    VECTOR_BACKEND: str = "faiss"           # faiss | numpy | auto
+    FAISS_DIR: str = str(DATA_DIR / "faiss")
+    EMBEDDING_PROVIDER: str = "siliconflow"  # siliconflow | mock（测试）
+    MODEL_EMBEDDING: str = "BAAI/bge-m3"
+    EMBEDDING_DIM: int = 1024
+    EMBEDDING_BATCH_SIZE: int = 32
+    EMBEDDING_MAX_CHARS: int = 2000
+    RAG_TOP_K: int = 5
+    RAG_MIN_SCORE: float = 0.25
+    RAG_SIMILAR_RESUMES: int = 3
+    RAG_SIMILAR_QUESTIONS: int = 4
+
     # 兼容旧字段：阶段三旧模板代码仍引用；接完新 jd_writer 后可删
     LLM_API_KEY: str = ""
 
