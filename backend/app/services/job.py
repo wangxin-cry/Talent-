@@ -97,6 +97,9 @@ def job_to_out(job: Job, skill_map: dict[int, Skill]) -> JobOut:
         jd_version=job.jd_version,
         published_at=job.published_at,
         closed_at=job.closed_at,
+        approved_by=job.approved_by,
+        approved_at=job.approved_at,
+        reject_reason=job.reject_reason,
         apply_count=job.apply_count,
         created_by=job.created_by,
         create_time=job.create_time,
@@ -178,6 +181,69 @@ async def change_status(db: AsyncSession, job: Job, target: str) -> Job:
     elif target == STATUS_CLOSED:
         job.closed_at = utcnow()
 
+    await db.commit()
+    await db.refresh(job)
+    return job
+def _mark_published(job: Job, reviewer_id: int) -> None:
+    job.status = STATUS_PUBLISHED
+    job.approved_by = reviewer_id
+    job.approved_at = utcnow()
+    job.published_at = utcnow()
+    job.reject_reason = None
+
+async def submit_for_approval(db: AsyncSession, job: Job) -> Job:
+    """提交审批：只有草稿可提交，提交前先做发布校验"""
+    if job.status != STATUS_DRAFT:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"只有草稿可以提交审批，当前状态：{_label(job.status)}",
+        )
+    _validate_publish(job)
+    job.status = STATUS_PENDING
+    job.reject_reason = None
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+async def approve_job(db: AsyncSession, job: Job, reviewer_id: int) -> Job:
+    """审批通过：pending → published，记录审批人"""
+    if job.status != STATUS_PENDING:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"只有待审批职位可以审批，当前状态：{_label(job.status)}",
+        )
+    _validate_publish(job)
+    _mark_published(job, reviewer_id)
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+async def publish_job(db: AsyncSession, job: Job, reviewer_id: int) -> Job:
+    """manager/admin 发布：草稿直发，或对待审批职位直接通过"""
+    if job.status == STATUS_PENDING:
+        return await approve_job(db, job, reviewer_id)
+    if job.status != STATUS_DRAFT:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"状态非法：{_label(job.status)} 不能发布",
+        )
+    _validate_publish(job)
+    _mark_published(job, reviewer_id)
+    await db.commit()
+    await db.refresh(job)
+    return job
+
+async def reject_job(db: AsyncSession, job: Job, reason: str) -> Job:
+    """驳回：pending → draft，写入驳回原因，等待修改后重新提交"""
+    if job.status != STATUS_PENDING:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"只有待审批职位可以驳回，当前状态：{_label(job.status)}",
+        )
+    job.status = STATUS_DRAFT
+    job.reject_reason = reason.strip()
+    job.approved_by = None
+    job.approved_at = None
     await db.commit()
     await db.refresh(job)
     return job

@@ -1,40 +1,38 @@
 # TalentMatch 数据库设计（V1）
 
 > 配套文档：《TalentMatch_项目设计方案_V1.md》《TalentMatch_对话式交互与产品画面_V1.md》
-> 本文是**从零设计**的完整数据模型：20 张表、6 个分组，逐表说明作用，逐字段说明含义。
+> 本文是**从零设计**的完整数据模型：19 张表、6 个分组，逐表说明作用，逐字段说明含义。
 > 阅读顺序建议：先看 §1 总览和关系图 → 再看 §3 你要实现的那几张表 → 最后看 §4 枚举与 §6 合规。
 
 ---
 
 # 一、总览
 
-## 1.1 表清单（20 张，6 组）
+## 1.1 表清单（19 张，6 组）
 
 | 组 | # | 表名 | 中文名 | 作用一句话 | 建设阶段 |
 |:--:|:--:|---|---|---|:--:|
 | **A 账号与配置** | 1 | `company` | 公司 | 企业主体，单公司部署时只有 1 行，为多租户预留 | 一 |
-| | 2 | `user` | 用户 | 平台账号与三角色（招聘专员/用人经理/管理员） | 一（二扩字段） |
-| | 3 | `auth_token` | 认证令牌 | 邮箱验证 / 找回密码的一次性令牌，只存哈希 | 二 |
-| | 4 | `llm_config` | 大模型配置 | 多厂商 API Key 与模型参数，支持 BYOK 与全局默认 | 一 |
-| **B 招聘核心** | 5 | `skill` | 技能词表 | 技能标准名与别名，解决"K8s / Kubernetes"归一问题 | 一 |
-| | 6 | `job` | 职位 | JD、技能要求、薪资、发布状态 | 一 |
-| | 7 | `candidate` | 候选人 | 候选人档案，多份简历合并为一人 | 一 |
-| | 8 | `resume_file` | 简历原始文件 | 文件元信息与解析状态；**文件本体存 MinIO** | 一 |
-| | 9 | `resume` | 简历解析结果 | 结构化字段 + 字段置信度 | 一 |
-| | 10 | `application` | 应聘记录 | 谁投了哪个职位、当前走到哪一步 | 一 |
-| | 11 | `application_stage_history` | 状态流转历史 | 每次状态变更留痕，算阶段耗时 | 一 |
-| **C 评估与面试** | 12 | `match_result` | 人岗匹配结果 | 可解释的评分、命中/缺失技能、理由 | 一 |
-| | 13 | `interview` | 面试安排 | 面试轮次、时间、面试官 | 六 |
-| | 14 | `interview_feedback` | 面试评估 | 面试官各维度打分与结论 | 六 |
-| **D 流程与通知** | 15 | `notification` | 通知记录 | 站内信/邮件发送记录与状态 | 六 |
-| **E 会话与 AI 可观测** | 16 | `chat_session` | 对话会话 | 对话式入口的会话（一个招聘任务一个） | 九½ |
-| | 17 | `chat_message` | 对话消息 | 消息文本 + 结果卡片数据 | 九½ |
-| | 18 | `agent_trace` | 编排轨迹 | 每个 Agent 每一步的执行记录（耗时/状态/降级） | 九 |
-| | 19 | `ai_call` | AI 调用计量 | 每次 LLM 调用的 token 与费用 | 一 |
-| **F 治理** | 20 | `audit_log` | 审计日志 | 敏感数据访问与关键操作留痕 | 一 |
+| | 2 | `user` | 用户 | 平台账号与三角色（招聘专员/用人经理/管理员） | 一 |
+| | 3 | `llm_config` | 大模型配置 | 多厂商 API Key 与模型参数，支持 BYOK 与全局默认 | 一 |
+| **B 招聘核心** | 4 | `skill` | 技能词表 | 技能标准名与别名，解决"K8s / Kubernetes"归一问题 | 一 |
+| | 5 | `job` | 职位 | JD、技能要求、薪资、发布状态 | 一 |
+| | 6 | `candidate` | 候选人 | 候选人档案，多份简历合并为一人 | 一 |
+| | 7 | `resume_file` | 简历原始文件 | 文件元信息与解析状态；**文件本体存 MinIO** | 一 |
+| | 8 | `resume` | 简历解析结果 | 结构化字段 + 字段置信度 | 一 |
+| | 9 | `application` | 应聘记录 | 谁投了哪个职位、当前走到哪一步 | 一 |
+| | 10 | `application_stage_history` | 状态流转历史 | 每次状态变更留痕，算阶段耗时 | 一 |
+| **C 评估与面试** | 11 | `match_result` | 人岗匹配结果 | 可解释的评分、命中/缺失技能、理由 | 一 |
+| | 12 | `interview` | 面试安排 | 面试轮次、时间、面试官 | 六 |
+| | 13 | `interview_feedback` | 面试评估 | 面试官各维度打分与结论 | 六 |
+| **D 流程与通知** | 14 | `notification` | 通知记录 | 站内信/邮件发送记录与状态 | 六 |
+| **E 会话与 AI 可观测** | 15 | `chat_session` | 对话会话 | 对话式入口的会话（一个招聘任务一个） | 九½ |
+| | 16 | `chat_message` | 对话消息 | 消息文本 + 结果卡片数据 | 九½ |
+| | 17 | `agent_trace` | 编排轨迹 | 每个 Agent 每一步的执行记录（耗时/状态/降级） | 九 |
+| | 18 | `ai_call` | AI 调用计量 | 每次 LLM 调用的 token 与费用 | 一 |
+| **F 治理** | 19 | `audit_log` | 审计日志 | 敏感数据访问与关键操作留痕 | 一 |
 
 > 阶段一一次建齐 13 张核心表（A/B/C 的 match_result + ai_call + audit_log），避免后期频繁改表；`interview*`、`notification`、`agent_trace`、`chat_*` 按对应阶段补建。
-> **阶段二新增** `auth_token` 表，并给 `user` 补 `email_verified_at`、`token_version` 两个字段（支持邮箱验证与登出吊销）。
 
 ## 1.2 实体关系图
 
@@ -46,7 +44,6 @@ company 1──* application
 company 1──* ai_call / audit_log / notification / chat_session
 
 user 1──* llm_config            (每用户每厂商一条)
-user 1──* auth_token            (邮箱验证 / 找回密码令牌)
 user 1──* job                   (created_by)
 user 1──* candidate             (created_by)
 user 1──* ai_call               (触发人)
@@ -168,25 +165,21 @@ application 1──* notification
 - **`role` 是角色唯一来源**，不再设 `is_admin`（PRD 三角色；若沿用旧代码需保留 `is_admin` 并保证与 `role` 同步）。
 - **登录失败锁定**：`login_fail_count` + `locked_until` 实现"5 次失败锁 15 分钟"（PRD §6.1.3）。也可放 Redis，落库更简单且可查。
 - **`password` 只存 bcrypt 哈希**，永不存明文。
-- **邮箱验证**：`email_verified_at` 为空即未验证。开发模式（`EMAIL_HOST` 为空）验证链接打印到后端控制台；启用 SMTP 后真实发信。未验证账号禁止登录。
-- **令牌吊销**：`token_version` 写进 JWT 的 `ver` 声明；登出或重置密码时 +1，已签发 token 立即失效（`get_current_user` / `refresh` 都会比对）。
 
 | 字段 | 类型 | 约束 | 默认 | 说明 |
 |---|---|---|:--:|---|
 | `id` | BIGINT | PK | | 主键 |
 | `company_id` | BIGINT | IDX | | 所属公司 |
 | `name` | VARCHAR(50) | NOT NULL, UQ | | 登录名（用户名） |
-| `email` | VARCHAR(255) | NOT NULL, UQ | | 邮箱，也用于通知与验证 |
+| `email` | VARCHAR(255) | NOT NULL, UQ | | 邮箱，也用于通知 |
 | `password` | VARCHAR(255) | NOT NULL | | bcrypt 哈希 |
 | `role` | VARCHAR(20) | NOT NULL, IDX | `recruiter` | `recruiter` / `manager` / `admin` |
 | `phone` | VARCHAR(30) | | NULL | 内部人员手机 |
 | `avatar_url` | VARCHAR(500) | | NULL | 头像 |
 | `status` | VARCHAR(20) | NOT NULL | `active` | `active` / `disabled` |
-| `email_verified_at` | DATETIME | | NULL | 邮箱验证通过时间；NULL 表示未验证，不可登录 |
 | `last_login_at` | DATETIME | | NULL | 最后登录时间 |
 | `login_fail_count` | INT | | 0 | 连续登录失败次数 |
 | `locked_until` | DATETIME | | NULL | 账号锁定到期时间 |
-| `token_version` | INT | NOT NULL | 0 | 令牌版本；登出 / 改密时 +1，旧 JWT 立即失效 |
 | `create_time` | DATETIME | NOT NULL | now | 创建时间 |
 | `update_time` | DATETIME | | now | 更新时间 |
 
@@ -194,33 +187,7 @@ application 1──* notification
 
 ---
 
-### 3.1.3 `auth_token` —— 认证令牌
-
-**作用**：承载"邮箱验证"与"找回密码"两类一次性令牌，服务端只存哈希，不存明文。
-
-**何时写/读**：注册成功、重发验证时写入；用户点击链接时读取并标记已用；忘记密码时签发；重置密码时消费。
-
-**关键设计点**：
-- **只存哈希**：`token_hash = sha256(明文)`，明文只出现在邮件或开发控制台，即使库泄漏也无法复用链接。
-- **一次性**：`used_at` 非空即作废；同一用户签发新令牌时，旧令牌全部置为已用，保证"最新链接唯一有效"。
-- **分用途隔离**：`purpose = verify_email / reset_password`，两类令牌不可互相冒用。
-- **有效期**：邮箱验证 24 小时（`EMAIL_VERIFY_EXPIRE_HOURS`），重置密码 30 分钟，均由 `expires_at` 控制。
-
-| 字段 | 类型 | 约束 | 默认 | 说明 |
-|---|---|---|:--:|---|
-| `id` | BIGINT | PK | | 主键 |
-| `user_id` | BIGINT | IDX, NOT NULL | | 所属用户 |
-| `token_hash` | VARCHAR(64) | NOT NULL, UQ | | 明文令牌的 SHA-256 十六进制 |
-| `purpose` | VARCHAR(30) | NOT NULL | | `verify_email` / `reset_password` |
-| `expires_at` | DATETIME | NOT NULL | | 过期时间 |
-| `used_at` | DATETIME | | NULL | 使用时间；非空表示已作废 |
-| `create_time` | DATETIME | NOT NULL | now | 创建时间 |
-
-**索引**：`UQ(token_hash)`、`IDX(user_id, purpose)`
-
----
-
-### 3.1.4 `llm_config` —— 大模型配置
+### 3.1.3 `llm_config` —— 大模型配置
 
 **作用**：多厂商 LLM 的接入配置。既支持**平台全局默认**（管理员维护），也支持**用户自带 Key（BYOK）**。
 
@@ -1113,7 +1080,6 @@ published ─────→ closed / archived
 | 阶段 | 建表 | 说明 |
 |:--:|---|---|
 | 一 | `company`、`user`、`llm_config`、`skill`、`job`、`candidate`、`resume_file`、`resume`、`application`、`application_stage_history`、`match_result`、`ai_call`、`audit_log`（13 张） | 一次建齐核心，避免后期频繁改表 |
-| 二 | `auth_token`（1 张）；`user` 增加 `email_verified_at`、`token_version` | 邮箱验证、找回密码、登出吊销令牌 |
 | 六 | `interview`、`interview_feedback`、`notification`（3 张） | 面试安排与通知 |
 | 九 | `agent_trace`（1 张） | 编排轨迹 |
 | 九½ | `chat_session`、`chat_message`（2 张） | 对话持久化 |
@@ -1157,7 +1123,7 @@ published ─────→ closed / archived
 | 表 | 初始数据 | 数量 |
 |---|---|---|
 | `company` | 演示公司 1 条（含品牌色与 careers_slug） | 1 |
-| `user` | 三个角色账号（`recruiter` / `manager` / `admin`），邮箱已验证，密码统一 `Talent@2026`（`scripts/seed_users.py` 生成） | 3 |
+| `user` | 三个角色账号（recruiter / manager / admin），密码统一演示用 | 3 |
 | `skill` | 常见技能 + 别名（语言/框架/数据库/中间件/工具/软技能） | 200+ |
 | `job` | 3 个职位（1 招聘中 / 1 草稿 / 1 已关闭） | 3 |
 | `candidate` | 演示候选人（含技能与经历） | 10 |

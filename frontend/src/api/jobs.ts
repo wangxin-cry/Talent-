@@ -33,6 +33,9 @@ export interface Job {
   jd_version: number
   published_at?: string | null
   closed_at?: string | null
+  approved_by?: number | null
+  approved_at?: string | null
+  reject_reason?: string | null
   apply_count: number
   created_by?: number | null
   create_time: string
@@ -99,6 +102,21 @@ export async function updateJob(id: number, payload: Partial<JobPayload>): Promi
 
 export async function publishJob(id: number): Promise<Job> {
   const { data } = await client.post<Job>(`/jobs/${id}/publish`)
+  return data
+}
+
+export async function submitJob(id: number): Promise<Job> {
+  const { data } = await client.post<Job>(`/jobs/${id}/submit`)
+  return data
+}
+
+export async function approveJob(id: number): Promise<Job> {
+  const { data } = await client.post<Job>(`/jobs/${id}/approve`)
+  return data
+}
+
+export async function rejectJob(id: number, reason: string): Promise<Job> {
+  const { data } = await client.post<Job>(`/jobs/${id}/reject`, { reason })
   return data
 }
 

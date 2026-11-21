@@ -16,6 +16,7 @@ from app.schemas.job import (
     JDGenerateIn,
     JDGenerateOut,
     JobCreateIn,
+    JobRejectIn,
     JobListOut,
     JobOut,
     JobUpdateIn,
@@ -25,8 +26,16 @@ from app.services.jd_writer import generate_jd
 from app.services.job import STATUS_LABELS
 from app.services.skills import load_skill_map
 
+REVIEW_ROLES = {"manager", "admin"}
+
 router = APIRouter(prefix="/jobs", tags=["职位"])
 
+def _require_reviewer(user) -> None:
+    if user.role not in REVIEW_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有用人经理或管理员可以审批职位",
+        )
 
 async def _to_out(db: AsyncSession, job) -> JobOut:
     skill_map = await load_skill_map(
@@ -92,10 +101,37 @@ async def update_job_api(
     return await _to_out(db, job)
 
 
-@router.post("/{job_id}/publish", response_model=JobOut, summary="发布职位")
-async def publish_job_api(job_id: int, db: DbSession, _: CurrentUser) -> JobOut:
+@router.post("/{job_id}/publish", response_model=JobOut, summary="发布职位（manager/admin）")
+async def publish_job_api(job_id: int, db: DbSession, user: CurrentUser) -> JobOut:
+    if user.role not in REVIEW_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="招聘专员不能直接发布职位，请先提交审批",
+        )
     job = await job_service.get_job_or_404(db, job_id)
-    job = await job_service.change_status(db, job, STATUS_PUBLISHED)
+    job = await job_service.publish_job(db, job, user.id)
+    return await _to_out(db, job)
+
+@router.post("/{job_id}/submit", response_model=JobOut, summary="提交审批")
+async def submit_job_api(job_id: int, db: DbSession, _: CurrentUser) -> JobOut:
+    job = await job_service.get_job_or_404(db, job_id)
+    job = await job_service.submit_for_approval(db, job)
+    return await _to_out(db, job)
+
+@router.post("/{job_id}/approve", response_model=JobOut, summary="审批通过")
+async def approve_job_api(job_id: int, db: DbSession, user: CurrentUser) -> JobOut:
+    _require_reviewer(user)
+    job = await job_service.get_job_or_404(db, job_id)
+    job = await job_service.approve_job(db, job, user.id)
+    return await _to_out(db, job)
+
+@router.post("/{job_id}/reject", response_model=JobOut, summary="驳回职位")
+async def reject_job_api(
+    job_id: int, data: JobRejectIn, db: DbSession, user: CurrentUser
+) -> JobOut:
+    _require_reviewer(user)
+    job = await job_service.get_job_or_404(db, job_id)
+    job = await job_service.reject_job(db, job, data.reason)
     return await _to_out(db, job)
 
 

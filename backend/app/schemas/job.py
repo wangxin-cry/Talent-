@@ -189,6 +189,9 @@ class JobOut(BaseModel):
     jd_version: int
     published_at: datetime | None = None
     closed_at: datetime | None = None
+    approved_by: int | None = None
+    approved_at: datetime | None = None
+    reject_reason: str | None = None
     apply_count: int
     created_by: int | None = None
     create_time: datetime
@@ -229,3 +232,15 @@ class JDGenerateOut(BaseModel):
     must_have_skills: list[SkillBrief] = []
     ai_generated: bool
     note: str | None = None
+
+class JobRejectIn(BaseModel):
+    """ 驳回职位 """
+    reason: str = Field(min_length=1, max_length=100)
+
+    @field_validator("reason")
+    @classmethod
+    def _clean_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("驳回原因不能为空")
+        return value

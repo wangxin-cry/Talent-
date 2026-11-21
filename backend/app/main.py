@@ -19,6 +19,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.health import router as health_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.skills import router as skills_router
+from app.api.v1.candidates import router as candidates_router
 from app.core.config import settings
 from app.core.database import close_db, init_db
 from app.core.logging import logger, setup_logging
@@ -61,6 +62,7 @@ app.add_middleware(
     expose_headers=["X-Process-Time"],
 )
 
+app.include_router(candidates_router, prefix=settings.API_PREFIX)
 
 @app.middleware("http")
 async def add_process_time(request: Request, call_next):

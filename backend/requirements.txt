@@ -33,6 +33,7 @@ pypdf>=4.2
 python-docx>=1.1
 pdfplumber>=0.11
 pillow>=10.3
+pymupdf>=1.24          # PDF 降级解析 + 扫描件渲染（缺少时自动跳过）
 
 # ===== 测试 =====
 pytest>=8

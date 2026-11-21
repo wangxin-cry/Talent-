@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import * as api from '@/api/jobs'
 import type { Job, JobPayload, Skill, SkillBrief } from '@/api/jobs'
+import { useAuthStore } from '@/stores/auth'
 
 const STATUS_LABEL: Record<string, string> = {
   draft: '草稿',
@@ -32,6 +33,11 @@ const EDUCATION_LEVELS = [
   { value: 'master', label: '硕士' },
   { value: 'phd', label: '博士' },
 ]
+
+const auth = useAuthStore()
+const canReview = computed(
+  () => auth.user?.role === 'manager' || auth.user?.role === 'admin',
+)
 
 function tagType(status: string): 'success' | 'info' | 'warning' | 'danger' | undefined {
   if (status === 'published') return 'success'
@@ -258,10 +264,12 @@ async function save(publishAfter: boolean) {
     }
 
     if (publishAfter && job.status !== 'published') {
-      job = await api.publishJob(job.id)
+      job = canReview.value ? await api.publishJob(job.id) : await api.submitJob(job.id)
     }
 
-    ElMessage.success(publishAfter ? '已发布' : '已保存')
+    ElMessage.success(
+      publishAfter ? (canReview.value ? '已发布' : '已提交审批') : '已保存',
+    )
     drawer.value = false
     await loadJobs()
   } catch (e: any) {
@@ -310,20 +318,48 @@ async function onGenerateJd() {
 }
 
 // ---------------------------------------------------------------- 状态流转
-async function transition(job: Job, action: 'publish' | 'close' | 'archive') {
-  const labels = { publish: '发布', close: '关闭', archive: '归档' }
-  try {
-    await ElMessageBox.confirm(
-      `确定要${labels[action]}职位「${job.title}」吗？`,
-      '状态变更',
-      { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
+type JobAction = 'submit' | 'publish' | 'approve' | 'reject' | 'close' | 'archive'
+
+async function transition(job: Job, action: JobAction) {
+  const labels: Record<JobAction, string> = {
+    submit: '提交审批',
+    publish: '发布',
+    approve: '审批通过',
+    reject: '驳回',
+    close: '关闭',
+    archive: '归档',
+  }
+
+  let reason = ''
+  if (action === 'reject') {
+    try {
+      const result = await ElMessageBox.prompt('请填写驳回原因', '驳回职位', {
+        confirmButtonText: '确认驳回',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputValidator: (value) => (value && value.trim() ? true : '驳回原因不能为空'),
+      })
+      reason = result.value.trim()
+    } catch {
+      return
+    }
+  } else {
+    try {
+      await ElMessageBox.confirm(
+        `确定要${labels[action]}职位「${job.title}」吗？`,
+        '状态变更',
+        { type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
   }
 
   try {
+    if (action === 'submit') await api.submitJob(job.id)
     if (action === 'publish') await api.publishJob(job.id)
+    if (action === 'approve') await api.approveJob(job.id)
+    if (action === 'reject') await api.rejectJob(job.id, reason)
     if (action === 'close') await api.closeJob(job.id)
     if (action === 'archive') await api.archiveJob(job.id)
     ElMessage.success(`已${labels[action]}`)
@@ -357,7 +393,13 @@ onMounted(async () => {
 
     <section class="panel">
       <div class="filters">
-        <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 140px">
+        <el-select
+          v-model="filters.status"
+          placeholder="全部状态"
+          clearable
+          style="width: 140px"
+          @change="onSearch"
+        >
           <el-option label="草稿" value="draft" />
           <el-option label="待审批" value="pending" />
           <el-option label="招聘中" value="published" />
@@ -381,6 +423,9 @@ onMounted(async () => {
             <div class="job-title">{{ row.title }}</div>
             <div class="job-meta">
               {{ row.department || '未填部门' }} · {{ row.location || '地点待定' }}
+            </div>
+            <div v-if="row.status === 'draft' && row.reject_reason" class="reject">
+              驳回原因：{{ row.reject_reason }}
             </div>
           </template>
         </el-table-column>
@@ -413,17 +458,54 @@ onMounted(async () => {
         <el-table-column label="更新时间" width="160">
           <template #default="{ row }">{{ row.update_time?.replace('T', ' ').slice(0, 16) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="290" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
             <el-button
-              v-if="row.status === 'draft' || row.status === 'pending'"
+              v-if="row.status === 'draft'"
+              link
+              type="primary"
+              @click="openEdit(row)"
+            >
+              编辑
+            </el-button>
+
+            <el-button
+              v-if="row.status === 'draft' && !canReview"
+              link
+              type="success"
+              @click="transition(row, 'submit')"
+            >
+              提交审批
+            </el-button>
+            <el-button
+              v-if="row.status === 'draft' && canReview"
               link
               type="success"
               @click="transition(row, 'publish')"
             >
               发布
             </el-button>
+
+            <el-button
+              v-if="row.status === 'pending' && canReview"
+              link
+              type="success"
+              @click="transition(row, 'approve')"
+            >
+              通过
+            </el-button>
+            <el-button
+              v-if="row.status === 'pending' && canReview"
+              link
+              type="danger"
+              @click="transition(row, 'reject')"
+            >
+              驳回
+            </el-button>
+            <span v-if="row.status === 'pending' && !canReview" class="muted small">
+              等待审批
+            </span>
+
             <el-button
               v-if="row.status === 'published'"
               link
@@ -569,7 +651,9 @@ onMounted(async () => {
           <div class="actions">
             <el-button @click="drawer = false">取消</el-button>
             <el-button :loading="saving" @click="save(false)">保存草稿</el-button>
-            <el-button type="primary" :loading="saving" @click="save(true)">保存并发布</el-button>
+            <el-button type="primary" :loading="saving" @click="save(true)">
+              {{ canReview ? '保存并发布' : '保存并提交审批' }}
+            </el-button>
           </div>
         </div>
       </template>
@@ -598,6 +682,7 @@ onMounted(async () => {
 .table { width: 100%; }
 .job-title { font-weight: 600; }
 .job-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.reject { margin-top: 4px; font-size: 12px; color: #dc2626; }
 .skill-tag { margin: 0 6px 4px 0; }
 .more { font-size: 12px; color: var(--muted); }
 .muted { color: var(--muted); font-size: 12.5px; }

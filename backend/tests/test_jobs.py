@@ -1,7 +1,46 @@
-"""职位管理测试：CRUD、状态机、发布校验、技能归一、JD 生成"""
+"""职位管理测试：CRUD、状态机、发布校验、技能归一、JD 生成、审批流"""
 from __future__ import annotations
 
+import os
+import sqlite3
+
+from app.core.security import hash_password
+from app.models.base import utcnow
+
+
 PREFIX = "/api/v1"
+
+
+def _db_path() -> str:
+    return os.environ["DATABASE_URL"].split("sqlite+aiosqlite:///", 1)[1]
+
+
+def _insert_user(name: str, email: str, role: str, password: str = "Passw0rd!") -> None:
+    now = str(utcnow())
+    conn = sqlite3.connect(_db_path())
+    try:
+        conn.execute(
+            '''
+            INSERT INTO "user"
+                (company_id, name, email, password, role, status, email_verified_at,
+                 login_fail_count, token_version, create_time, update_time)
+            VALUES (1, ?, ?, ?, ?, 'active', ?, 0, 0, ?, ?)
+            ''',
+            (name, email, hash_password(password), role, now, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _manager_headers(client, suffix: str) -> dict[str, str]:
+    name = f"mgr_{suffix}"
+    _insert_user(name, f"{name}@example.com", "manager")
+    login = client.post(
+        f"{PREFIX}/auth/login", json={"account": name, "password": "Passw0rd!"}
+    )
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
 def _auth_headers(client, email_capture, suffix: str) -> dict[str, str]:
@@ -46,8 +85,8 @@ def test_job_crud_and_state_machine(client, email_capture):
     assert [s["name"] for s in job["skills"]] == ["Kubernetes"]
     job_id = job["id"]
 
-    # 缺描述 / 要求 → 发布被拒
-    failed = client.post(f"{PREFIX}/jobs/{job_id}/publish", headers=headers)
+    # 缺描述 / 要求 → 提交审批被拒
+    failed = client.post(f"{PREFIX}/jobs/{job_id}/submit", headers=headers)
     assert failed.status_code == 400
     assert "职位描述" in failed.json()["error"]["message"]
 
@@ -59,15 +98,25 @@ def test_job_crud_and_state_machine(client, email_capture):
     assert updated.status_code == 200, updated.text
     assert updated.json()["jd_version"] == 2
 
-    published = client.post(f"{PREFIX}/jobs/{job_id}/publish", headers=headers)
-    assert published.status_code == 200, published.text
-    assert published.json()["status"] == "published"
-    assert published.json()["published_at"] is not None
+    # 招聘专员不能直接发布
+    forbidden = client.post(f"{PREFIX}/jobs/{job_id}/publish", headers=headers)
+    assert forbidden.status_code == 403
+
+    submitted = client.post(f"{PREFIX}/jobs/{job_id}/submit", headers=headers)
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["status"] == "pending"
+
+    manager = _manager_headers(client, "flow")
+    approved = client.post(f"{PREFIX}/jobs/{job_id}/approve", headers=manager)
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "published"
+    assert approved.json()["published_at"] is not None
+    assert approved.json()["approved_by"] is not None
 
     # 非法流转：published 不能回到 published / draft
-    again = client.post(f"{PREFIX}/jobs/{job_id}/publish", headers=headers)
+    again = client.post(f"{PREFIX}/jobs/{job_id}/approve", headers=manager)
     assert again.status_code == 400
-    assert "状态非法" in again.json()["error"]["message"]
+    assert "待审批" in again.json()["error"]["message"]
 
     closed = client.post(f"{PREFIX}/jobs/{job_id}/close", headers=headers)
     assert closed.status_code == 200
@@ -97,7 +146,9 @@ def test_job_list_filter_and_detail(client, email_capture):
     )
     assert created.status_code == 201
     job_id = created.json()["id"]
-    assert client.post(f"{PREFIX}/jobs/{job_id}/publish", headers=headers).status_code == 200
+    assert client.post(f"{PREFIX}/jobs/{job_id}/submit", headers=headers).status_code == 200
+    manager = _manager_headers(client, "list")
+    assert client.post(f"{PREFIX}/jobs/{job_id}/approve", headers=manager).status_code == 200
 
     listed = client.get(
         f"{PREFIX}/jobs", params={"status": "published", "q": "缓存"}, headers=headers
@@ -141,3 +192,49 @@ def test_generate_jd_normalizes_skills(client, email_capture):
     )
     assert resp2.status_code == 200
     assert "内部特征平台X" in [skill["name"] for skill in resp2.json()["skills"]]
+
+
+def test_reject_then_resubmit_and_approve(client, email_capture):
+    headers = _auth_headers(client, email_capture, "reject")
+    manager = _manager_headers(client, "reject")
+    skill_id = _create_skill(client, headers, "Go", ["Golang"])
+
+    created = client.post(
+        f"{PREFIX}/jobs",
+        json={
+            "title": "Go 后端工程师",
+            "skills": [skill_id],
+            "description": "负责服务端开发",
+            "requirements": "熟悉 Go",
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["id"]
+
+    assert client.post(f"{PREFIX}/jobs/{job_id}/submit", headers=headers).status_code == 200
+
+    rejected = client.post(
+        f"{PREFIX}/jobs/{job_id}/reject",
+        json={"reason": "薪资范围需要和 HR 确认"},
+        headers=manager,
+    )
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["status"] == "draft"
+    assert rejected.json()["reject_reason"] == "薪资范围需要和 HR 确认"
+
+    # 驳回后修改再提交，旧原因清除
+    updated = client.put(
+        f"{PREFIX}/jobs/{job_id}",
+        json={"salary_min": 20, "salary_max": 30},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    resubmitted = client.post(f"{PREFIX}/jobs/{job_id}/submit", headers=headers)
+    assert resubmitted.status_code == 200
+    assert resubmitted.json()["reject_reason"] is None
+
+    approved = client.post(f"{PREFIX}/jobs/{job_id}/approve", headers=manager)
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "published"
+    assert approved.json()["approved_by"] is not None

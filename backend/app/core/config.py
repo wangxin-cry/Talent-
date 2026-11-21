@@ -78,7 +78,6 @@ class Settings(BaseSettings):
     MAX_UPLOAD_MB: int = 20
     ALLOWED_UPLOAD_EXTS: str = ".pdf,.doc,.docx,.jpg,.jpeg,.png"
 
-    # ---------- LLM ----------
     # ---------- 大模型（硅基流动，OpenAI 兼容） ----------
     SILICONFLOW_BASE_URL: str = "https://api.siliconflow.cn/v1"
     SILICONFLOW_API_KEY: str = ""
@@ -94,6 +93,11 @@ class Settings(BaseSettings):
     OCR_DETAIL: str = "high"  # low | high
     OCR_MAX_TOKENS: int = 4096
     OCR_TEMPERATURE: float = 0.0
+
+    # ---------- 简历解析（阶段四） ----------
+    RESUME_MAX_CHARS: int = 12000      # 送进模型的简历文本上限，控制单次成本
+    RESUME_MAX_FILES: int = 10         # 单次最多上传文件数
+    LOW_CONFIDENCE_THRESHOLD: float = 0.7  # 低于此值前端标黄
 
     # 通用开关与超时
     LLM_MOCK: bool = False  # true 强制走模板（测试用）；正常调用保持 false
