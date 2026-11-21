@@ -25,6 +25,7 @@ from app.api.v1.orchestration import router as orchestration_router
 from app.api.v1.rag import router as rag_router
 from app.api.v1.skills import router as skills_router
 from app.api.v1.candidates import router as candidates_router
+from app.api.v1.chat import router as chat_router
 from app.api.v1.matching import router as matching_router
 from app.core.config import settings
 from app.core.database import close_db, init_db
@@ -124,6 +125,7 @@ app.include_router(notifications_router, prefix=settings.API_PREFIX)
 app.include_router(analytics_router, prefix=settings.API_PREFIX)
 app.include_router(rag_router, prefix=settings.API_PREFIX)
 app.include_router(orchestration_router, prefix=settings.API_PREFIX)
+app.include_router(chat_router, prefix=settings.API_PREFIX)
 
 
 @app.get("/", tags=["系统"], summary="根路径")

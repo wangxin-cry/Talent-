@@ -49,6 +49,20 @@ from app.models.base import (  # noqa: F401
     TimestampMixin,
     utcnow,
 )
+from app.models.chat import (  # noqa: F401
+    CARD_CHART,
+    CARD_CONFIRM,
+    CARD_INTERVIEW,
+    CARD_MATCH_RANK,
+    CARD_PARSE_RESULT,
+    CARD_TYPES,
+    CARD_UPLOAD,
+    ROLE_ASSISTANT,
+    ROLE_SYSTEM,
+    ROLE_USER,
+    ChatMessage,
+    ChatSession,
+)
 from app.models.candidate import (  # noqa: F401
     FILE_STATUS_LABELS,
     RF_FAILED,
@@ -114,7 +128,10 @@ __all__ = [
     "Candidate", "ResumeFile", "Resume", "AuditLog", "MatchResult",
     "Application", "ApplicationStageHistory", "Notification", "InterviewQuestion",
     "RagChunk", "DOC_RESUME", "DOC_JOB", "DOC_QUESTION", "DOC_TYPE_LABELS",
-    "AgentTrace",
+    "AgentTrace", "ChatSession", "ChatMessage",
+    "ROLE_USER", "ROLE_ASSISTANT", "ROLE_SYSTEM",
+    "CARD_UPLOAD", "CARD_PARSE_RESULT", "CARD_MATCH_RANK",
+    "CARD_INTERVIEW", "CARD_CONFIRM", "CARD_CHART", "CARD_TYPES",
     "AGENT_MANAGER", "AGENT_JD_WRITER", "AGENT_RESUME_PARSER", "AGENT_MATCH_ENGINE",
     "AGENT_INTERVIEW", "AGENT_WORKFLOW", "AGENT_ANALYTICS",
     "TRACE_SUCCESS", "TRACE_FAILED", "TRACE_TIMEOUT", "TRACE_SKIPPED", "TRACE_DEGRADED",
