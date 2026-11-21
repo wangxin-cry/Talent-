@@ -1,4 +1,4 @@
-# 启动开发环境（后端 + 前端）
+﻿# 启动开发环境（后端 + 前端）
 #
 # 用法（项目根目录）：
 #   powershell -ExecutionPolicy Bypass -File scripts\dev.ps1

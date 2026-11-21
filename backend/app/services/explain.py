@@ -70,7 +70,15 @@ def build_template_explanation(feats: MatchFeatures, scores: dict) -> dict:
     }
 
 
-async def build_explanation(feats: MatchFeatures, scores: dict, use_llm: bool = False) -> dict:
+async def build_explanation(
+    feats: MatchFeatures,
+    scores: dict,
+    use_llm: bool = False,
+    *,
+    job_id: int | None = None,
+    candidate_id: int | None = None,
+    user_id: int | None = None,
+) -> dict:
     """
     生成匹配理由。
     use_llm=True 时尝试用 LLM 润色 summary/suggestion，失败自动降级模板。
@@ -93,7 +101,16 @@ async def build_explanation(feats: MatchFeatures, scores: dict, use_llm: bool = 
             "请用一句话给出匹配结论，并给出一句面试建议。输出 JSON："
             '{"summary": "...", "suggestion": "..."}'
         )
-        result = await llm.chat_json("你是招聘匹配顾问", prompt, temperature=0.3)
+        result = await llm.chat_json(
+            "你是招聘匹配顾问",
+            prompt,
+            temperature=0.3,
+            feature="match_explain",
+            user_id=user_id,
+            job_id=job_id,
+            candidate_id=candidate_id,
+            agent="MatchEngineAgent",
+        )
         polished = llm.loads_json(result.text)
         if isinstance(polished, dict):
             if polished.get("summary"):

@@ -108,6 +108,9 @@ class Settings(BaseSettings):
 
     # ---------- 成本 ----------
     MONTHLY_BUDGET_CNY: float = 500.0
+    # 未在 app/core/pricing.py 收录的模型，按此默认单价计费（元 / 1K token）
+    LLM_PRICE_INPUT_PER_1K: float = 0.002
+    LLM_PRICE_OUTPUT_PER_1K: float = 0.008
 
     # ---------- 助手属性 ----------
     @property

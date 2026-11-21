@@ -494,7 +494,9 @@ async def process_file(db: AsyncSession, file_id: int) -> None:
     try:
         data = get_storage().get(file.object_key)
         text, parser_name, meta = await _extract_content(data, file)
-        payload, confidence, extract_meta = await extract_resume(text)
+        payload, confidence, extract_meta = await extract_resume(
+            text, job_id=file.applied_job_id, user_id=file.uploaded_by
+        )
         meta["extract"] = extract_meta
 
         candidate = await _merge_candidate(db, file, payload)
@@ -560,7 +562,7 @@ async def _extract_content(data: bytes, file: ResumeFile) -> tuple[str, str, dic
     ext = (file.ext or "").lower()
 
     if ext in IMAGE_EXTS:
-        return await _vision_text(data, file.mime or "image/png", "vision")
+        return await _vision_text(data, file.mime or "image/png", "vision", file)
 
     if ext == ".pdf":
         try:
@@ -572,7 +574,13 @@ async def _extract_content(data: bytes, file: ResumeFile) -> tuple[str, str, dic
                 raise pdf_error
             try:
                 text = "\n".join([
-                    await vision.image_to_text(image, "image/png") for image in images
+                    await vision.image_to_text(
+                        image,
+                        "image/png",
+                        job_id=file.applied_job_id,
+                        user_id=file.uploaded_by,
+                    )
+                    for image in images
                 ])
             except vision.VisionError as exc:
                 raise ParseError("PDF 无文字层且图片识别失败，请手动录入") from exc
@@ -580,9 +588,16 @@ async def _extract_content(data: bytes, file: ResumeFile) -> tuple[str, str, dic
 
     return extract_text(data, ext)
 
-async def _vision_text(data: bytes, mime: str, parser_name: str) -> tuple[str, str, dict]:
+async def _vision_text(
+    data: bytes, mime: str, parser_name: str, file: ResumeFile
+) -> tuple[str, str, dict]:
     try:
-        text = await vision.image_to_text(data, mime)
+        text = await vision.image_to_text(
+            data,
+            mime,
+            job_id=file.applied_job_id,
+            user_id=file.uploaded_by,
+        )
     except vision.VisionError as exc:
         logger.warning(f"图片识别失败：{exc}")
         raise ParseError("图片识别失败（视觉模型未配置或图片不清晰），请手动录入") from exc

@@ -21,6 +21,18 @@ const router = createRouter({
       component: () => import('@/views/InterviewPrepView.vue'),
     },
     {
+      path: '/analytics',
+      name: 'analytics',
+      // 数据看板：指标卡 + 漏斗 + 渠道 + 周期
+      component: () => import('@/views/DashboardView.vue'),
+    },
+    {
+      path: '/costs',
+      name: 'costs',
+      // AI 成本监控：汇总、预算告警、调用明细分页
+      component: () => import('@/views/CostView.vue'),
+    },
+    {
       path: '/jobs',
       name: 'jobs',
       component: () => import('@/views/JobsView.vue'),

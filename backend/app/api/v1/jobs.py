@@ -45,8 +45,8 @@ async def _to_out(db: AsyncSession, job) -> JobOut:
 
 
 @router.post("/generate-jd", response_model=JDGenerateOut, summary="AI 生成 JD")
-async def generate_jd_api(data: JDGenerateIn, db: DbSession, _: CurrentUser) -> JDGenerateOut:
-    result = await generate_jd(db, data)
+async def generate_jd_api(data: JDGenerateIn, db: DbSession, user: CurrentUser) -> JDGenerateOut:
+    result = await generate_jd(db, data, user.id)
     # 生成过程中可能按关键词新建技能，必须提交；否则返回的 skill id 会随会话回滚而失效
     await db.commit()
     return result

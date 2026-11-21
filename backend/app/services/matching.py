@@ -114,7 +114,14 @@ async def match_job(db: AsyncSession, job: Job, use_llm: bool = False) -> MatchR
 
         feats = extract_features(job, cand, skill_map)
         scores = compute_scores(feats)
-        explanation = await build_explanation(feats, scores, use_llm=use_llm)
+        explanation = await build_explanation(
+            feats,
+            scores,
+            use_llm=use_llm,
+            job_id=job.id,
+            candidate_id=cand.id,
+            user_id=job.created_by,
+        )
 
         detail = {
             "scores": scores,

@@ -555,12 +555,21 @@ def _from_llm_payload(payload: dict) -> list[QuestionDraft] | None:
     return drafts
 
 
-async def _generate_with_llm(ctx: PrepContext) -> list[QuestionDraft] | None:
+async def _generate_with_llm(
+    ctx: PrepContext, application: Application
+) -> list[QuestionDraft] | None:
     if not llm.is_configured():
         return None
     try:
         result = await llm.chat_json(
-            SYSTEM_PROMPT, _build_user_prompt(ctx), temperature=0.5
+            SYSTEM_PROMPT,
+            _build_user_prompt(ctx),
+            temperature=0.5,
+            feature="interview_generate",
+            user_id=application.created_by,
+            job_id=application.job_id,
+            candidate_id=application.candidate_id,
+            agent="InterviewAssistantAgent",
         )
         payload = llm.loads_json(result.text)
     except llm.LLMError:
@@ -636,7 +645,7 @@ async def generate_questions(
     source = "template"
     drafts: list[QuestionDraft] | None = None
     if use_llm:
-        drafts = await _generate_with_llm(ctx)
+        drafts = await _generate_with_llm(ctx, application)
         if drafts:
             source = "llm"
     if not drafts:

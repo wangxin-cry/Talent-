@@ -66,7 +66,7 @@ def _template(data: JDGenerateIn, names: list[str]) -> dict[str, str]:
     }
 
 async def _generate_by_llm(
-    data: JDGenerateIn, keywords: list[str]
+    data: JDGenerateIn, keywords: list[str], user_id: int | None = None
 ) -> tuple[dict[str, str | list[str]], ChatResult]:
     user_prompt = (
         f"职位名称：{data.title}\n"
@@ -75,7 +75,13 @@ async def _generate_by_llm(
         f"级别：{data.level or '不限'}\n"
         f"关键词：{'、'.join(keywords)}"
     )
-    result = await chat_json(SYSTEM_PROMPT, user_prompt)
+    result = await chat_json(
+        SYSTEM_PROMPT,
+        user_prompt,
+        feature="jd_generate",
+        user_id=user_id,
+        agent="JDWriterAgent",
+    )
     payload = loads_json(result.text)
 
     description = payload.get("description")
@@ -103,13 +109,15 @@ async def _generate_by_llm(
         result,
     )
 
-async def generate_jd(db: AsyncSession, data: JDGenerateIn) -> JDGenerateOut:
+async def generate_jd(
+    db: AsyncSession, data: JDGenerateIn, user_id: int | None = None
+) -> JDGenerateOut:
     keywords = [item for item in data.keywords if item.strip()] or FALLBACK_KEYWORDS
     fallback_reason = ""
 
     if is_configured():
         try:
-            payload, result = await _generate_by_llm(data, keywords)
+            payload, result = await _generate_by_llm(data, keywords, user_id)
             skills = await resolve_skill_names(db, payload["skills"])
             must_names = {name.casefold() for name in payload["must_have_skills"]}
             must = [skill for skill in skills if skill.name.casefold() in must_names] or skills[:2]

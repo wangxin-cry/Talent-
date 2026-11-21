@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import time
 
 import httpx
 from loguru import logger
@@ -26,7 +27,20 @@ def _models() -> list[str]:
     return result
 
 
-async def image_to_text(data: bytes, mime: str = "image/png") -> str:
+async def _record(**kwargs) -> None:
+    from app.services import costs
+
+    await costs.record_ai_call(**kwargs)
+
+
+async def image_to_text(
+    data: bytes,
+    mime: str = "image/png",
+    *,
+    job_id: int | None = None,
+    user_id: int | None = None,
+    feature: str = "resume_ocr",
+) -> str:
     if settings.LLM_MOCK:
         raise VisionError("LLM_MOCK=true，跳过视觉识别")
     if not settings.SILICONFLOW_API_KEY.strip():
@@ -41,7 +55,11 @@ async def image_to_text(data: bytes, mime: str = "image/png") -> str:
     }
 
     last_error: Exception | None = None
+    started = time.perf_counter()
+    current_model = settings.MODEL_OCR.strip() or FALLBACK_MODELS[0]
+
     for model in _models():
+        current_model = model
         payload = {
             "model": model,
             "messages": [
@@ -75,7 +93,8 @@ async def image_to_text(data: bytes, mime: str = "image/png") -> str:
                 if resp.status_code >= 400:
                     raise VisionError(f"HTTP {resp.status_code}：{resp.text[:200]}")
 
-                content = resp.json()["choices"][0]["message"]["content"]
+                body = resp.json()
+                content = body["choices"][0]["message"]["content"]
                 if isinstance(content, list):
                     content = "".join(
                         part.get("text", "") for part in content if isinstance(part, dict)
@@ -83,9 +102,32 @@ async def image_to_text(data: bytes, mime: str = "image/png") -> str:
                 text = (content or "").strip()
                 if not text:
                     raise VisionError("视觉模型返回空内容")
+
+                usage = body.get("usage") or {}
+                await _record(
+                    feature=feature,
+                    model=body.get("model") or model,
+                    input_tokens=int(usage.get("prompt_tokens") or 0),
+                    output_tokens=int(usage.get("completion_tokens") or 0),
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                    status="success",
+                    user_id=user_id,
+                    job_id=job_id,
+                    agent="ResumeParserAgent",
+                )
                 return text
 
-            except VisionError:
+            except VisionError as exc:
+                await _record(
+                    feature=feature,
+                    model=current_model,
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                    status="failed",
+                    error_reason=str(exc),
+                    user_id=user_id,
+                    job_id=job_id,
+                    agent="ResumeParserAgent",
+                )
                 raise
             except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
                 last_error = exc
@@ -94,4 +136,14 @@ async def image_to_text(data: bytes, mime: str = "image/png") -> str:
                     continue
                 break
 
+    await _record(
+        feature=feature,
+        model=current_model,
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        status="failed",
+        error_reason=str(last_error) if last_error else "视觉模型调用失败",
+        user_id=user_id,
+        job_id=job_id,
+        agent="ResumeParserAgent",
+    )
     raise VisionError(str(last_error) if last_error else "视觉模型调用失败")

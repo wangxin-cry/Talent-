@@ -3,6 +3,12 @@
 
 create_all 之前必须导入全部模型，否则表不会被创建。
 """
+from app.models.ai_call import (  # noqa: F401
+    AI_STATUS_FAILED,
+    AI_STATUS_SKIPPED,
+    AI_STATUS_SUCCESS,
+    AiCall,
+)
 from app.models.application import (  # noqa: F401
     APP_HIRED,
     APP_INTERVIEW,
@@ -85,6 +91,8 @@ __all__ = [
     "User", "AuthToken", "Skill", "Job",
     "Candidate", "ResumeFile", "Resume", "AuditLog", "MatchResult",
     "Application", "ApplicationStageHistory", "Notification", "InterviewQuestion",
+    "AiCall",
+    "AI_STATUS_SUCCESS", "AI_STATUS_FAILED", "AI_STATUS_SKIPPED",
     "RF_PENDING", "RF_PARSING", "RF_SUCCESS", "RF_FAILED", "FILE_STATUS_LABELS",
     "STATUS_DRAFT", "STATUS_PENDING", "STATUS_PUBLISHED", "STATUS_CLOSED", "STATUS_ARCHIVED",
     "JD_SOURCE_MANUAL", "JD_SOURCE_AI", "WORK_MODES", "EMPLOYMENT_TYPES", "EDUCATION_LEVELS",

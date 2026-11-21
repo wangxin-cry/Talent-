@@ -305,7 +305,12 @@ def _infer_education_from_text(payload: dict, text: str) -> tuple[dict, bool]:
     return payload, inferred
 
 
-async def extract_resume(text: str) -> tuple[dict, dict[str, float], dict]:
+async def extract_resume(
+    text: str,
+    *,
+    job_id: int | None = None,
+    user_id: int | None = None,
+) -> tuple[dict, dict[str, float], dict]:
     """返回 (结构化 payload, 字段置信度, 元信息)；LLM 失败自动降级为规则抽取"""
     content = (text or "").strip()
     if not content:
@@ -320,7 +325,15 @@ async def extract_resume(text: str) -> tuple[dict, dict[str, float], dict]:
         if attempt:
             prompt += "\n\n注意：上一次输出无法解析，请只输出一个合法 JSON 对象，不要任何解释。"
         try:
-            result = await llm.chat_json(SYSTEM, prompt, temperature=0.1)
+            result = await llm.chat_json(
+                SYSTEM,
+                prompt,
+                temperature=0.1,
+                feature="resume_parse",
+                user_id=user_id,
+                job_id=job_id,
+                agent="ResumeParserAgent",
+            )
             payload = normalize_payload(llm.loads_json(result.text))
             meta.update({
                 "model": result.model,
