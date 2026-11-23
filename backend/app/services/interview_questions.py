@@ -729,7 +729,7 @@ async def generate_questions(
             sort_order=index,
             source=source,
             fingerprint=fingerprint,
-            company_id=1,
+            company_id=application.company_id,
             rag_sources=references if source == "llm_rag" else [],
         )
         db.add(row)

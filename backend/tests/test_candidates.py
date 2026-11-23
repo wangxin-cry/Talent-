@@ -26,6 +26,7 @@ import time
 import uuid
 
 from docx import Document
+from docx.oxml import parse_xml
 
 from app.core.security import hash_password
 from app.models.base import utcnow
@@ -71,6 +72,28 @@ def _docx(*lines: str) -> bytes:
     doc = Document()
     for line in lines:
         doc.add_paragraph(line)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _docx_textbox(*lines: str) -> bytes:
+    """构造“正文全在文本框里”的 DOCX：python-docx 读不到，XML 能读到"""
+    from xml.sax.saxutils import escape
+
+    body = "".join(
+        f"<w:p><w:r><w:t>{escape(line)}</w:t></w:r></w:p>" for line in lines
+    )
+    pict = parse_xml(
+        '<w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:v="urn:schemas-microsoft-com:vml">'
+        '<v:shape id="resumeTextBox" style="width:400pt;height:300pt">'
+        f"<v:textbox><w:txbxContent>{body}</w:txbxContent></v:textbox>"
+        "</v:shape></w:pict>"
+    )
+    doc = Document()
+    paragraph = doc.add_paragraph()
+    paragraph.add_run()._r.append(pict)
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
@@ -163,6 +186,29 @@ def test_upload_docx_parsed(client):
     # 测试环境 LLM_MOCK=true，抽取走规则兜底，置信度会被压到 ≤0.55
     assert 0 < detail["field_confidence"]["phone"] <= 0.6
     assert detail["parser_meta"]["extract"]["source"] == "rule"
+
+
+def test_upload_docx_with_textboxes(client):
+    """Word 简历常用文本框排版，python-docx 读不到正文时要用 XML 兜底"""
+    headers = _headers(client)
+    phone = "13966667777"
+    data = _docx_textbox(
+        "文本框简历",
+        f"手机：{phone}",
+        "邮箱：textbox.test@example.com",
+        "工作经历：某科技公司 | 后端工程师 | 2023-07 ~ 至今",
+        "技能：Python、MySQL",
+    )
+
+    item = _upload_one(client, headers, "文本框简历.docx", data)
+    assert item["status"] == "success", item
+    assert item["candidate_id"]
+
+    detail = client.get(f"{PREFIX}/candidates/{item['candidate_id']}", headers=headers).json()
+    assert detail["files"][0]["status"] == "success"
+    assert detail["files"][0]["parser"] == "docx-xml"
+    assert "文本框简历" in (detail["plain_text"] or "")
+    assert detail["structured"]["basic"]["phone"] == phone
 
 
 def test_same_file_reused(client):
@@ -294,3 +340,79 @@ def test_reparse(client):
         "select count(*) from audit_log where action = 'resume.reparse' and target_id = ?",
         (item["file_id"],),
     ) >= 1
+
+
+# ---------------------------------------------------------------- 360° 概览
+def _create_job(client, headers, title: str = "后端工程师") -> int:
+    resp = client.post(
+        f"{PREFIX}/jobs", headers=headers, json={"title": title, "department": "技术部"}
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+def test_candidate_overview(client):
+    headers = _headers(client)
+    item = _upload_one(client, headers, "郑十.docx", _resume("郑十", "13912344321"))
+    cid = item["candidate_id"]
+    job_id = _create_job(client, headers)
+
+    application = client.post(
+        f"{PREFIX}/applications",
+        headers=headers,
+        json={"job_id": job_id, "candidate_id": cid, "source": "upload"},
+    )
+    assert application.status_code == 201, application.text
+    app_id = application.json()["id"]
+
+    moved = client.post(
+        f"{PREFIX}/applications/{app_id}/transition",
+        headers=headers,
+        json={"to_status": "screening", "note": "简历匹配度不错"},
+    )
+    assert moved.status_code == 200, moved.text
+
+    matched = client.post(f"{PREFIX}/matching/jobs/{job_id}/match", headers=headers)
+    assert matched.status_code == 200, matched.text
+
+    resp = client.get(f"{PREFIX}/candidates/{cid}/overview", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # 档案详情仍然完整
+    assert body["id"] == cid
+    assert body["name"] == "郑十"
+    assert body["files"][0]["status"] == "success"
+
+    # 应聘记录
+    assert len(body["applications"]) == 1
+    app_out = body["applications"][0]
+    assert app_out["job_id"] == job_id
+    assert app_out["job_title"] == "后端工程师"
+    assert app_out["department"] == "技术部"
+    assert app_out["status"] == "screening"
+    assert app_out["status_label"] == "筛选中"
+
+    # 匹配结果（规则分，不需要 LLM）
+    assert body["matches"], body["matches"]
+    match = body["matches"][0]
+    assert match["job_id"] == job_id
+    assert match["job_title"] == "后端工程师"
+    assert 0 <= match["score"] <= 100
+
+    # 时间线覆盖建档 / 上传 / 加入流程 / 阶段流转，且按时间倒序
+    kinds = {entry["kind"] for entry in body["timeline"]}
+    assert {"candidate", "resume", "application", "stage"} <= kinds
+    times = [entry["time"] for entry in body["timeline"]]
+    assert times == sorted(times, reverse=True)
+
+
+def test_overview_respects_candidate_scope(client):
+    owner = _headers(client, "cv_owner")
+    item = _upload_one(client, owner, "钱十一.docx", _resume("钱十一", "13922223333"))
+    cid = item["candidate_id"]
+
+    other = _headers(client, "cv_other")
+    resp = client.get(f"{PREFIX}/candidates/{cid}/overview", headers=other)
+    assert resp.status_code == 403
+

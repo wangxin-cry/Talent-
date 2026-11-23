@@ -83,6 +83,52 @@ export interface CandidateList {
   total: number
 }
 
+export interface CandidateApplication {
+  id: number
+  job_id: number
+  job_title: string
+  department?: string | null
+  status: string
+  status_label: string
+  source?: string | null
+  match_score?: number | null
+  applied_at: string
+  stage_entered_at: string
+  rejected_reason?: string | null
+  hired_at?: string | null
+  question_count: number
+}
+
+export interface CandidateMatch {
+  id: number
+  job_id: number
+  job_title: string
+  score: number
+  skill_score?: number | null
+  exp_score?: number | null
+  edu_score?: number | null
+  matched_skills: string[]
+  missing_skills: string[]
+  summary?: string | null
+  feedback?: string | null
+  create_time: string
+}
+
+export interface CandidateTimelineItem {
+  time: string
+  kind: string
+  title: string
+  description?: string | null
+  application_id?: number | null
+  job_id?: number | null
+}
+
+export interface CandidateOverview extends CandidateDetail {
+  applications: CandidateApplication[]
+  matches: CandidateMatch[]
+  timeline: CandidateTimelineItem[]
+}
+
 export interface CandidatePayload {
   name?: string | null
   phone?: string | null
@@ -126,6 +172,11 @@ export async function listCandidates(params: {
 
 export async function getCandidate(id: number): Promise<CandidateDetail> {
   const { data } = await client.get<CandidateDetail>(`/candidates/${id}`)
+  return data
+}
+
+export async function getCandidateOverview(id: number): Promise<CandidateOverview> {
+  const { data } = await client.get<CandidateOverview>(`/candidates/${id}/overview`)
   return data
 }
 

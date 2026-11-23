@@ -13,6 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.base import utcnow
+from app.core.tenant import get_company_id, require_company_id
 from app.models.job import (
     JD_SOURCE_AI,
     JD_SOURCE_MANUAL,
@@ -24,7 +25,9 @@ from app.models.job import (
     Job,
 )
 from app.models.skill import Skill
+from app.models.user import ROLE_ADMIN, ROLE_MANAGER
 from app.schemas.job import JobCreateIn, JobOut, SkillBrief, JobUpdateIn
+from app.services import notifications as notification_svc
 from app.services.skills import ensure_skill_ids, load_skill_map
 
 # 允许的状态流转
@@ -109,7 +112,10 @@ def job_to_out(job: Job, skill_map: dict[int, Skill]) -> JobOut:
 
 async def get_job_or_404(db: AsyncSession, job_id: int) -> Job:
     job = await db.get(Job, job_id)
-    if job is None:
+    current_company = get_company_id()
+    if job is None or (
+        current_company is not None and job.company_id != current_company
+    ):
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND, detail="职位不存在"
         )
@@ -126,7 +132,7 @@ async def create_job(db: AsyncSession, data: JobCreateIn, user_id: int) -> Job:
         status=STATUS_DRAFT,
         jd_source=jd_source,
         created_by=user_id,
-        company_id=1,
+        company_id=require_company_id(),
     )
     db.add(job)
     await db.commit()
@@ -160,7 +166,9 @@ def _label(status: str) -> str:
     return STATUS_LABELS.get(status, status)
 
 
-async def change_status(db: AsyncSession, job: Job, target: str) -> Job:
+async def change_status(
+    db: AsyncSession, job: Job, target: str, operator_id: int | None = None
+) -> Job:
     allowed = JOB_TRANSITIONS.get(job.status, set())
     if target not in allowed:
         allowed_text = "、".join(_label(s) for s in sorted(allowed)) or "无"
@@ -181,9 +189,45 @@ async def change_status(db: AsyncSession, job: Job, target: str) -> Job:
     elif target == STATUS_CLOSED:
         job.closed_at = utcnow()
 
+    if target in (STATUS_CLOSED, STATUS_ARCHIVED) and job.created_by and job.created_by != operator_id:
+        await notification_svc.create_notification(
+            db,
+            user_id=job.created_by,
+            template="job_status_changed",
+            subject=f"职位已{_label(target)}",
+            body=f"职位「{job.title}」已{_label(target)}。",
+        )
+
     await db.commit()
     await db.refresh(job)
     return job
+
+
+async def _notify_published(db: AsyncSession, job: Job, operator_id: int) -> None:
+    """发布成功后通知管理员/经理（排除操作人和创建人）以及职位创建人"""
+    creator = job.created_by
+    exclude = {operator_id}
+    if creator:
+        exclude.add(creator)
+
+    await notification_svc.notify_roles(
+        db,
+        roles={ROLE_MANAGER, ROLE_ADMIN},
+        exclude_user_ids=exclude,
+        template="job_published",
+        subject="职位已发布",
+        body=f"职位「{job.title}」已发布上线。",
+    )
+    if creator and creator != operator_id:
+        await notification_svc.create_notification(
+            db,
+            user_id=creator,
+            template="job_published",
+            subject="你的职位已发布",
+            body=f"职位「{job.title}」已通过审批并发布上线。",
+        )
+
+
 def _mark_published(job: Job, reviewer_id: int) -> None:
     job.status = STATUS_PUBLISHED
     job.approved_by = reviewer_id
@@ -191,7 +235,9 @@ def _mark_published(job: Job, reviewer_id: int) -> None:
     job.published_at = utcnow()
     job.reject_reason = None
 
-async def submit_for_approval(db: AsyncSession, job: Job) -> Job:
+async def submit_for_approval(
+    db: AsyncSession, job: Job, operator_id: int | None = None
+) -> Job:
     """提交审批：只有草稿可提交，提交前先做发布校验"""
     if job.status != STATUS_DRAFT:
         raise HTTPException(
@@ -201,6 +247,16 @@ async def submit_for_approval(db: AsyncSession, job: Job) -> Job:
     _validate_publish(job)
     job.status = STATUS_PENDING
     job.reject_reason = None
+
+    await notification_svc.notify_roles(
+        db,
+        roles={ROLE_MANAGER, ROLE_ADMIN},
+        exclude_user_ids={operator_id} if operator_id else None,
+        template="job_pending_approval",
+        subject="职位待审批",
+        body=f"职位「{job.title}」已提交审批，请及时处理。",
+    )
+
     await db.commit()
     await db.refresh(job)
     return job
@@ -214,6 +270,7 @@ async def approve_job(db: AsyncSession, job: Job, reviewer_id: int) -> Job:
         )
     _validate_publish(job)
     _mark_published(job, reviewer_id)
+    await _notify_published(db, job, reviewer_id)
     await db.commit()
     await db.refresh(job)
     return job
@@ -229,11 +286,14 @@ async def publish_job(db: AsyncSession, job: Job, reviewer_id: int) -> Job:
         )
     _validate_publish(job)
     _mark_published(job, reviewer_id)
+    await _notify_published(db, job, reviewer_id)
     await db.commit()
     await db.refresh(job)
     return job
 
-async def reject_job(db: AsyncSession, job: Job, reason: str) -> Job:
+async def reject_job(
+    db: AsyncSession, job: Job, reason: str, reviewer_id: int | None = None
+) -> Job:
     """驳回：pending → draft，写入驳回原因，等待修改后重新提交"""
     if job.status != STATUS_PENDING:
         raise HTTPException(
@@ -244,6 +304,19 @@ async def reject_job(db: AsyncSession, job: Job, reason: str) -> Job:
     job.reject_reason = reason.strip()
     job.approved_by = None
     job.approved_at = None
+
+    if job.created_by and job.created_by != reviewer_id:
+        await notification_svc.create_notification(
+            db,
+            user_id=job.created_by,
+            template="job_rejected",
+            subject="职位审批被驳回",
+            body=(
+                f"职位「{job.title}」被驳回：{job.reject_reason}。"
+                "请修改后重新提交审批。"
+            ),
+        )
+
     await db.commit()
     await db.refresh(job)
     return job
@@ -255,6 +328,7 @@ async def list_jobs(
     q: str | None = None,
     skip: int = 0,
     limit: int = 20,
+    scope=None,
 ) -> tuple[list[Job], int]:
     conditions = []
     if status:
@@ -262,6 +336,8 @@ async def list_jobs(
     if q and q.strip():
         keyword = f"%{q.strip()}%"
         conditions.append(or_(Job.title.ilike(keyword), Job.department.ilike(keyword)))
+    if scope is not None:
+        conditions.append(scope)
 
     base = select(Job)
     if conditions:

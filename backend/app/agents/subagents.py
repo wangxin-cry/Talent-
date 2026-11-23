@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.context import OrchestrationContext
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.tenant import require_company_id
 from app.models.candidate import RF_FAILED, RF_PENDING, Candidate, ResumeFile
 from app.models.job import Job
 from app.schemas.job import JDGenerateIn
@@ -74,7 +75,7 @@ async def run_jd_writer(db: AsyncSession, ctx: OrchestrationContext) -> AgentOut
     """JDWriter：职位名 + 关键词 → 三段 JD（可编辑草稿）"""
     title = (ctx.title or "").strip()
     if not title and ctx.job_id:
-        job = await db.get(Job, ctx.job_id)
+        job = await get_job_or_404(db, ctx.job_id)
         title = job.title if job else ""
     if not title:
         raise DependencyMissing("缺少职位名称，无法生成 JD")
@@ -117,7 +118,10 @@ async def run_resume_parser(db: AsyncSession, ctx: OrchestrationContext) -> Agen
             (
                 await db.execute(
                     select(ResumeFile.id)
-                    .where(ResumeFile.status.in_([RF_PENDING, RF_FAILED]))
+                    .where(
+                        ResumeFile.status.in_([RF_PENDING, RF_FAILED]),
+                        ResumeFile.company_id == require_company_id(),
+                    )
                     .order_by(ResumeFile.id.asc())
                     .limit(limit)
                 )
@@ -356,7 +360,7 @@ async def fallback_match(db: AsyncSession, ctx: OrchestrationContext, reason: st
     if not ctx.job_id:
         return AgentOutcome(summary={"total": 0}, degraded=True, error=reason)
 
-    job = await db.get(Job, ctx.job_id)
+    job = await get_job_or_404(db, ctx.job_id)
     if job is None:
         return AgentOutcome(summary={"total": 0}, degraded=True, error=reason)
 

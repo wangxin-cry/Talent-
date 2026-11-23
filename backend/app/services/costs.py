@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.pricing import estimate_cost
+from app.core.tenant import get_company_id
 from app.models.ai_call import AI_STATUS_SUCCESS, AiCall
 from app.models.base import utcnow
 from app.models.job import Job
@@ -63,12 +64,18 @@ async def record_ai_call(
                     job_id=job_id,
                     candidate_id=candidate_id,
                     trace_id=trace_id,
-                    company_id=1,
+                    company_id=get_company_id() or 1,
                 )
             )
             await session.commit()
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"AI 调用记账失败（不影响业务）：{exc}")
+
+
+def _company_condition():
+    """成本按公司统计；无上下文（超管）时返回空集条件"""
+    company_id = get_company_id()
+    return AiCall.company_id == (company_id if company_id is not None else 0)
 
 
 async def list_calls(
@@ -80,7 +87,7 @@ async def list_calls(
     job_id: int | None = None,
     status: str | None = None,
 ) -> tuple[list[AiCall], int]:
-    conditions = []
+    conditions = [_company_condition()]
     if feature:
         conditions.append(AiCall.feature == feature)
     if job_id:
@@ -115,7 +122,7 @@ def _today_start() -> datetime:
 
 
 async def _sum_cost(db: AsyncSession, since: datetime | None = None) -> float:
-    query = select(func.coalesce(func.sum(AiCall.cost), 0))
+    query = select(func.coalesce(func.sum(AiCall.cost), 0)).where(_company_condition())
     if since is not None:
         query = query.where(AiCall.create_time >= since)
     value = (await db.execute(query)).scalar_one()
@@ -125,10 +132,14 @@ async def _sum_cost(db: AsyncSession, since: datetime | None = None) -> float:
 async def summary(db: AsyncSession) -> dict:
     """成本汇总：总量、今日/本月、按功能、按职位、预算告警"""
     total_calls = (
-        await db.execute(select(func.count()).select_from(AiCall))
+        await db.execute(
+            select(func.count()).select_from(AiCall).where(_company_condition())
+        )
     ).scalar_one()
     total_tokens = (
-        await db.execute(select(func.coalesce(func.sum(AiCall.total_tokens), 0)))
+        await db.execute(
+            select(func.coalesce(func.sum(AiCall.total_tokens), 0)).where(_company_condition())
+        )
     ).scalar_one()
     total_cost = await _sum_cost(db)
     today_cost = await _sum_cost(db, _today_start())
@@ -142,6 +153,7 @@ async def summary(db: AsyncSession) -> dict:
                 func.coalesce(func.sum(AiCall.total_tokens), 0).label("tokens"),
                 func.coalesce(func.sum(AiCall.cost), 0).label("cost"),
             )
+            .where(_company_condition())
             .group_by(AiCall.feature)
             .order_by(func.coalesce(func.sum(AiCall.cost), 0).desc())
         )
@@ -155,7 +167,7 @@ async def summary(db: AsyncSession) -> dict:
                 func.coalesce(func.sum(AiCall.total_tokens), 0).label("tokens"),
                 func.coalesce(func.sum(AiCall.cost), 0).label("cost"),
             )
-            .where(AiCall.job_id.is_not(None))
+            .where(AiCall.job_id.is_not(None), _company_condition())
             .group_by(AiCall.job_id)
             .order_by(func.coalesce(func.sum(AiCall.cost), 0).desc())
             .limit(10)

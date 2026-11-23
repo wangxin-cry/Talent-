@@ -5,6 +5,8 @@ import { ElMessage } from 'element-plus'
 
 import * as appApi from '@/api/applications'
 import type { NotificationItem } from '@/api/applications'
+import { currentCompany } from '@/api/company'
+import ProfileDialog from '@/components/ProfileDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -13,10 +15,54 @@ const router = useRouter()
 
 const AUTH_PAGES = ['login', 'register', 'forgot-password', 'reset-password', 'verify-email']
 const isAuthPage = computed(() => AUTH_PAGES.includes(String(route.name)))
+// 招聘官网等对外页面：不展示内部导航
+const isPublicPage = computed(() => route.meta.public === true && !isAuthPage.value)
 // 工作台是满屏三栏布局，需要去掉内容区 padding
-const isFullBleed = computed(() => route.name === 'home')
+const isFullBleed = computed(() => route.name === 'home' || isPublicPage.value)
 
-const initial = computed(() => (auth.user?.name || '?').trim().slice(0, 1).toUpperCase())
+const initial = computed(() =>
+  (auth.displayName || '?').trim().slice(0, 1).toUpperCase(),
+)
+
+// 当前公司（超管不属于任何公司）
+const companyName = ref('')
+
+async function loadCompany() {
+  if (!auth.isLoggedIn) {
+    companyName.value = ''
+    return
+  }
+  try {
+    const company = await currentCompany()
+    companyName.value = company.name
+  } catch {
+    companyName.value = ''
+  }
+}
+
+// 对外招聘页带上公司标识
+const publicCareersLink = computed(() =>
+  route.params.slug
+    ? { name: 'career-list', params: { slug: route.params.slug } }
+    : { name: 'careers' },
+)
+
+// 头像图片加载失败时回退到首字母
+const avatarError = ref(false)
+watch(
+  () => auth.user?.avatar_url,
+  () => {
+    avatarError.value = false
+  },
+)
+
+// ---------------- 个人资料 ----------------
+const profileOpen = ref(false)
+
+function onUserCommand(command: string) {
+  if (command === 'profile') profileOpen.value = true
+  if (command === 'logout') void onLogout()
+}
 
 // ---------------- 站内通知 ----------------
 const notifications = ref<NotificationItem[]>([])
@@ -66,17 +112,34 @@ function formatTime(value: string): string {
   return value.replace('T', ' ').slice(5, 16)
 }
 
+watch(
+  [() => auth.isSuperAdmin, () => route.path],
+  ([isSuper]) => {
+    // 超管只进入平台管理，避免落到无公司上下文的业务页
+    if (isSuper && route.path !== '/platform' && route.meta.public !== true) {
+      void router.replace('/platform')
+    }
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   if (auth.accessToken) {
     void auth.fetchMe()
     void loadUnread()
+    void loadCompany()
   }
 })
 
 watch(
   () => auth.isLoggedIn,
   (logged) => {
-    if (logged) void loadUnread()
+    if (logged) {
+      void loadUnread()
+      void loadCompany()
+    } else {
+      companyName.value = ''
+    }
   },
 )
 
@@ -88,10 +151,26 @@ async function onLogout() {
 
 <template>
   <div class="app-shell">
-    <header v-if="!isAuthPage" class="topbar">
+    <header v-if="isPublicPage" class="topbar public-topbar">
+      <RouterLink class="brand" :to="publicCareersLink">
+        <span class="logo-mark">T</span>
+        <span class="brand-name">TalentMatch</span>
+      </RouterLink>
+      <nav class="nav">
+        <RouterLink :to="publicCareersLink" active-class="active">在招职位</RouterLink>
+        <RouterLink :to="{ name: 'careers-status' }" active-class="active">投递进度</RouterLink>
+      </nav>
+      <div class="right">
+        <RouterLink v-if="auth.isLoggedIn" class="login-link" to="/">返回工作台</RouterLink>
+        <RouterLink v-else class="login-link" to="/login">招聘者登录</RouterLink>
+      </div>
+    </header>
+
+    <header v-else-if="!isAuthPage" class="topbar">
       <RouterLink class="brand" to="/">
         <span class="logo-mark">T</span>
         <span class="brand-name">TalentMatch</span>
+        <span v-if="companyName" class="company-chip">{{ companyName }}</span>
       </RouterLink>
 
       <nav class="nav">
@@ -105,8 +184,11 @@ async function onLogout() {
         <RouterLink to="/analytics" active-class="active">数据看板</RouterLink>
         <RouterLink to="/costs" active-class="active">成本</RouterLink>
         <template v-if="auth.isAdmin">
-          <span class="disabled">用户管理</span>
-          <span class="disabled">审计</span>
+          <RouterLink to="/company" active-class="active">公司设置</RouterLink>
+          <RouterLink to="/admin" active-class="active">管理后台</RouterLink>
+        </template>
+        <template v-if="auth.isSuperAdmin">
+          <RouterLink to="/platform" active-class="active">平台管理</RouterLink>
         </template>
       </nav>
 
@@ -143,18 +225,42 @@ async function onLogout() {
             </div>
           </el-popover>
 
-          <span class="role-badge">{{ auth.roleLabel }}</span>
-          <span class="user-name">{{ auth.user?.name }}</span>
-          <span class="avatar">{{ initial }}</span>
-          <button class="logout" @click="onLogout">退出</button>
+          <el-dropdown trigger="click" placement="bottom-end" @command="onUserCommand">
+            <button class="user-chip" type="button">
+              <img
+                v-if="auth.user?.avatar_url && !avatarError"
+                class="avatar-img"
+                :src="auth.user.avatar_url"
+                alt="头像"
+                @error="avatarError = true"
+              />
+              <span v-else class="avatar">{{ initial }}</span>
+              <span class="user-meta">
+                <span class="user-name">{{ auth.displayName }}</span>
+                <span class="user-role">{{ auth.roleLabel }}</span>
+              </span>
+              <span class="caret">▾</span>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="profile">个人资料</el-dropdown-item>
+                <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </template>
         <RouterLink v-else class="login-link" to="/login">登录</RouterLink>
       </div>
     </header>
 
-    <main class="content" :class="{ 'is-auth': isAuthPage, 'is-full': isFullBleed }">
+    <main
+      class="content"
+      :class="{ 'is-auth': isAuthPage, 'is-full': isFullBleed, 'is-public': isPublicPage }"
+    >
       <RouterView />
     </main>
+
+    <ProfileDialog v-model="profileOpen" />
   </div>
 </template>
 
@@ -200,6 +306,19 @@ async function onLogout() {
   font-size: 13px;
   font-weight: 700;
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
+}
+.company-chip {
+  margin-left: 4px;
+  padding: 2px 8px;
+  border-radius: 7px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 11.5px;
+  font-weight: 600;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nav {
@@ -340,30 +459,47 @@ async function onLogout() {
   color: var(--faint);
   font-size: 12.5px;
 }
-.role-badge {
-  display: inline-flex;
+.user-chip {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  background: #fff;
-  border: 1px solid #e4e7f6;
-  color: var(--primary);
-  padding: 4px 11px;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 550;
+  gap: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 12px;
+  padding: 3px 7px 3px 3px;
+  cursor: pointer;
+  transition: 0.16s;
 }
-.role-badge::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #6366f1, #a78bfa);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+.user-chip:hover {
+  background: #fff;
+  border-color: var(--line);
+  box-shadow: var(--shadow-sm);
+}
+.user-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  max-width: 120px;
 }
 .user-name {
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-role {
+  font-size: 11px;
+  color: var(--faint);
+  line-height: 1.1;
+}
+.caret {
+  color: var(--faint);
+  font-size: 11px;
+  margin-left: 1px;
 }
 .avatar {
   width: 32px;
@@ -376,21 +512,15 @@ async function onLogout() {
   color: #fff;
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px #e4e7f6;
+  flex: 0 0 auto;
 }
-.logout {
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--muted);
-  border-radius: 9px;
-  padding: 5px 12px;
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: 0.16s;
-}
-.logout:hover {
-  border-color: #c9cffa;
-  color: var(--primary);
-  box-shadow: var(--shadow-sm);
+.avatar-img {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px #e4e7f6;
+  flex: 0 0 auto;
 }
 .login-link {
   font-size: 13px;
@@ -401,10 +531,14 @@ async function onLogout() {
 .login-link:hover {
   text-decoration: underline;
 }
+.public-topbar .brand {
+  margin-right: 8px;
+}
 
 /* ---------------- 内容区 ---------------- */
 .content {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 26px 28px 40px;
 }
@@ -415,7 +549,12 @@ async function onLogout() {
 }
 .content.is-full {
   padding: 0;
+  min-height: 0;
   overflow: hidden;
+}
+.content.is-public {
+  padding: 0;
+  overflow: auto;
 }
 
 @media (max-width: 900px) {
@@ -424,8 +563,8 @@ async function onLogout() {
     gap: 14px;
   }
   .brand-name,
-  .role-badge,
-  .user-name {
+  .company-chip,
+  .user-meta {
     display: none;
   }
   .nav a,

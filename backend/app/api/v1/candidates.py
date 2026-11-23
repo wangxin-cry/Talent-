@@ -33,6 +33,7 @@ from app.schemas.candidate import (
     CandidateCreateIn,
     CandidateDetailOut,
     CandidateListOut,
+    CandidateOverviewOut,
     CandidateUpdateIn,
     DownloadOut,
     FileStatusListOut,
@@ -41,7 +42,9 @@ from app.schemas.candidate import (
 )
 from app.services import audit
 from app.services import candidates as candidate_service
-from app.services.candidates import run_parse_task
+from app.services import scope
+from app.services import system_config as config_service
+from app.services.queue import enqueue_parse_resume
 
 router = APIRouter(tags=["候选人"])
 
@@ -63,10 +66,16 @@ async def upload_api(
     if len(files) > settings.RESUME_MAX_FILES:
         raise_400(f"一次最多上传 {settings.RESUME_MAX_FILES} 个文件")
 
-    items = await candidate_service.upload_files(db, files, user.id, applied_job_id)
+    items = await candidate_service.upload_files(
+        db,
+        files,
+        user.id,
+        applied_job_id,
+        max_file_mb=await config_service.get_value(db, "resume.max_upload_mb"),
+    )
     for item in items:
         if item["file_id"] and not item["reused"] and item["status"] == "pending":
-            background.add_task(run_parse_task, item["file_id"])
+            enqueue_parse_resume(background, item["file_id"])
     return UploadOut(items=[UploadItemOut(**item) for item in items])
 
 def raise_400(message: str) -> None:
@@ -77,13 +86,17 @@ def raise_400(message: str) -> None:
 @router.get("/candidates", response_model=CandidateListOut, summary="候选人列表")
 async def list_api(
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     q: str | None = Query(default=None, max_length=100),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> CandidateListOut:
     items, total = await candidate_service.list_candidates(
-        db, q=q, skip=(page - 1) * page_size, limit=page_size
+        db,
+        q=q,
+        skip=(page - 1) * page_size,
+        limit=page_size,
+        scope=scope.candidate_scope_condition(user),
     )
     return CandidateListOut(items=items, total=total)
 
@@ -97,8 +110,23 @@ async def create_api(data: CandidateCreateIn, db: DbSession, user: CurrentUser) 
     return await candidate_service.create_candidate(db, data, user.id)
 
 @router.get("/candidates/{candidate_id}", response_model=CandidateDetailOut, summary="候选人详情")
-async def detail_api(candidate_id: int, db: DbSession, _: CurrentUser) -> CandidateDetailOut:
+async def detail_api(candidate_id: int, db: DbSession, user: CurrentUser) -> CandidateDetailOut:
+    candidate = await candidate_service.get_candidate_or_404(db, candidate_id)
+    await scope.ensure_candidate_access(db, user, candidate)
     return await candidate_service.get_candidate_detail(db, candidate_id)
+
+@router.get(
+    "/candidates/{candidate_id}/overview",
+    response_model=CandidateOverviewOut,
+    summary="候选人 360° 概览",
+)
+async def overview_api(
+    candidate_id: int, db: DbSession, user: CurrentUser
+) -> CandidateOverviewOut:
+    candidate = await candidate_service.get_candidate_or_404(db, candidate_id)
+    await scope.ensure_candidate_access(db, user, candidate)
+    return await candidate_service.get_candidate_overview(db, user, candidate_id)
+
 
 @router.put("/candidates/{candidate_id}", response_model=CandidateDetailOut, summary="校对保存")
 async def update_api(
@@ -107,6 +135,8 @@ async def update_api(
     db: DbSession,
     user: CurrentUser,
 ) -> CandidateDetailOut:
+    candidate = await candidate_service.get_candidate_or_404(db, candidate_id)
+    await scope.ensure_candidate_access(db, user, candidate)
     return await candidate_service.update_candidate(db, candidate_id, data, user.id)
 
 @router.get("/resume-files/status", response_model=FileStatusListOut, summary="批量查询解析状态")
@@ -121,6 +151,7 @@ async def status_api(
 @router.get("/resume-files/{file_id}/download", response_model=DownloadOut, summary="下载简历（预签名）")
 async def download_api(file_id: int, db: DbSession, user: CurrentUser) -> DownloadOut:
     file = await candidate_service.get_file_or_404(db, file_id)
+    await scope.ensure_file_access(db, user, file)
     url = get_storage().presign_get(file.object_key, settings.PRESIGN_EXPIRE_SECONDS)
     await audit.write_audit(
         db, action="resume.download", target_type="resume_file",
@@ -141,8 +172,10 @@ async def reparse_api(
     db: DbSession,
     user: CurrentUser,
 ) -> UploadItemOut:
+    file = await candidate_service.get_file_or_404(db, file_id)
+    await scope.ensure_file_access(db, user, file)
     file = await candidate_service.reparse_file(db, file_id, user.id)
-    background.add_task(run_parse_task, file.id)
+    enqueue_parse_resume(background, file.id)
     return UploadItemOut(
         file_id=file.id,
         original_name=file.original_name,

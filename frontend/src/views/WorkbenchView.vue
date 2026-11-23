@@ -821,6 +821,8 @@ onMounted(async () => {
 <style scoped>
 .workbench {
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr) 300px;
 }
@@ -833,6 +835,7 @@ onMounted(async () => {
   flex-direction: column;
   gap: 6px;
   padding: 14px 10px;
+  min-height: 0;
   overflow: auto;
 }
 .sessions-head {
@@ -919,6 +922,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   height: 100%;
 }
 .chat-head {
@@ -971,11 +975,30 @@ onMounted(async () => {
 
 .chat-stream {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 20px 22px 10px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+.chat-stream::-webkit-scrollbar,
+.sessions::-webkit-scrollbar,
+.context::-webkit-scrollbar {
+  width: 8px;
+}
+.chat-stream::-webkit-scrollbar-thumb,
+.sessions::-webkit-scrollbar-thumb,
+.context::-webkit-scrollbar-thumb {
+  background: #d4d9e8;
+  border-radius: 4px;
+}
+.chat-stream::-webkit-scrollbar-thumb:hover,
+.sessions::-webkit-scrollbar-thumb:hover,
+.context::-webkit-scrollbar-thumb:hover {
+  background: #b9c1d8;
 }
 .banner-error {
   background: var(--danger-soft);
@@ -1504,6 +1527,7 @@ onMounted(async () => {
 .context {
   background: var(--panel);
   border-left: 1px solid var(--line);
+  min-height: 0;
   overflow-y: auto;
   padding: 16px 14px;
   display: flex;

@@ -15,6 +15,7 @@ from app.schemas.match import (
     MatchTriggerOut,
 )
 from app.services import matching as matching_svc
+from app.services import scope
 from app.services.job import get_job_or_404
 
 router = APIRouter(prefix="/matching", tags=["匹配"])
@@ -44,6 +45,7 @@ async def trigger_match(
 ):
     """对职位执行匹配（规则分同步计算；LLM 理由可选）"""
     job = await get_job_or_404(db, job_id)
+    scope.ensure_job_access(user, job)
     run = await matching_svc.match_job(db, job, use_llm=use_llm)
 
     names = await _candidate_names(db, [mr.candidate_id for mr in run.items])
@@ -66,6 +68,7 @@ async def list_matches(
 ):
     """查询某职位的匹配排名"""
     job = await get_job_or_404(db, job_id)
+    scope.ensure_job_access(user, job)
     results = await matching_svc.get_match_results(db, job)
 
     if min_score > 0:
@@ -85,6 +88,8 @@ async def get_match(match_id: int, db: DbSession, user: CurrentUser):
     mr = await matching_svc.get_match_detail(db, match_id)
     if mr is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="匹配结果不存在")
+    job = await get_job_or_404(db, mr.job_id)
+    scope.ensure_job_access(user, job)
     names = await _candidate_names(db, [mr.candidate_id])
     detail = MatchDetailOut.model_validate(mr)
     return detail.model_copy(update={"candidate_name": names.get(mr.candidate_id)})
@@ -99,6 +104,11 @@ async def feedback(
     """HR 标注「合适/不合适」，用于后续校准"""
     if payload.feedback not in ("fit", "unfit"):
         raise HTTPException(status_code=400, detail="feedback 只能是 fit 或 unfit")
+    mr = await matching_svc.get_match_detail(db, match_id)
+    if mr is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="匹配结果不存在")
+    job = await get_job_or_404(db, mr.job_id)
+    scope.ensure_job_access(user, job)
     mr = await matching_svc.save_feedback(db, match_id, payload.feedback)
     if mr is None:
         raise HTTPException(status_code=404, detail="匹配结果不存在")

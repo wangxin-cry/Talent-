@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.core.tenant import get_company_id
+
 from sqlalchemy import BigInteger, DateTime, Integer, func
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,6 +40,11 @@ class TimestampMixin:
 
 
 class CompanyScopedMixin:
-    """公司隔离字段（单公司部署恒为 1，为多租户预留）"""
+    """公司隔离字段
 
-    company_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False, default=1)
+    默认取请求/任务上下文中的公司；仅在没有上下文（如初始化脚本）时回落到 1。
+    """
+
+    company_id: Mapped[int] = mapped_column(
+        BigInteger, index=True, nullable=False, default=lambda: get_company_id() or 1
+    )

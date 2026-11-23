@@ -26,10 +26,21 @@ from app.models.application import (
 )
 from app.models.base import utcnow
 from app.models.job import STATUS_PUBLISHED, Job
+from app.core.tenant import require_company_id
 
 # 正向漏斗阶段（不含淘汰）
 FORWARD_STAGES = (APP_NEW, APP_SCREENING, APP_INTERVIEW, APP_OFFER, APP_HIRED)
 CHANNEL_UNKNOWN = "未标注"
+
+
+def _app_company():
+    """应聘记录的公司边界条件"""
+    return Application.company_id == require_company_id()
+
+
+def _company_app_ids():
+    """当前公司下的应聘记录 id 子查询（给无 company_id 的历史表用）"""
+    return select(Application.id).where(_app_company())
 
 
 def _label(value: str) -> str:
@@ -53,7 +64,9 @@ async def _reached_counts(db: AsyncSession) -> dict[str, set[int]]:
             select(
                 ApplicationStageHistory.application_id,
                 ApplicationStageHistory.to_status,
-            ).distinct()
+            )
+            .where(ApplicationStageHistory.application_id.in_(_company_app_ids()))
+            .distinct()
         )
     ).all()
     for application_id, status_value in history_rows:
@@ -61,7 +74,9 @@ async def _reached_counts(db: AsyncSession) -> dict[str, set[int]]:
             reached.setdefault(status_value, set()).add(application_id)
 
     current_rows = (
-        await db.execute(select(Application.id, Application.status))
+        await db.execute(
+            select(Application.id, Application.status).where(_app_company())
+        )
     ).all()
     for application_id, status_value in current_rows:
         if status_value:
@@ -72,17 +87,21 @@ async def _reached_counts(db: AsyncSession) -> dict[str, set[int]]:
 async def overview(db: AsyncSession) -> dict:
     open_jobs = (
         await db.execute(
-            select(func.count()).select_from(Job).where(Job.status == STATUS_PUBLISHED)
+            select(func.count())
+            .select_from(Job)
+            .where(Job.status == STATUS_PUBLISHED, Job.company_id == require_company_id())
         )
     ).scalar_one()
 
     total_applications = (
-        await db.execute(select(func.count()).select_from(Application))
+        await db.execute(select(func.count()).select_from(Application).where(_app_company()))
     ).scalar_one()
 
     status_rows = (
         await db.execute(
-            select(Application.status, func.count()).group_by(Application.status)
+            select(Application.status, func.count())
+            .where(_app_company())
+            .group_by(Application.status)
         )
     ).all()
     status_counts = {status: int(count) for status, count in status_rows}
@@ -90,6 +109,7 @@ async def overview(db: AsyncSession) -> dict:
     hired_rows = (
         await db.execute(
             select(Application.applied_at, Application.hired_at).where(
+                _app_company(),
                 Application.status == APP_HIRED,
                 Application.hired_at.is_not(None),
             )
@@ -123,7 +143,9 @@ async def funnel(db: AsyncSession) -> list[dict]:
     """
     current_rows = (
         await db.execute(
-            select(Application.status, func.count()).group_by(Application.status)
+            select(Application.status, func.count())
+            .where(_app_company())
+            .group_by(Application.status)
         )
     ).all()
     current = {status: int(count) for status, count in current_rows}
@@ -160,7 +182,9 @@ async def channels(db: AsyncSession) -> list[dict]:
     面试与入职同样按「到达过」统计，否则已入职的人不会被计入面试数。
     """
     rows = (
-        await db.execute(select(Application.id, Application.source))
+        await db.execute(
+            select(Application.id, Application.source).where(_app_company())
+        )
     ).all()
     reached = await _reached_counts(db)
     interview_ids = reached.get(APP_INTERVIEW, set())
@@ -202,6 +226,7 @@ async def cycle(db: AsyncSession) -> list[dict]:
                 ),
             )
             .where(
+                ApplicationStageHistory.application_id.in_(_company_app_ids()),
                 ApplicationStageHistory.from_status.is_not(None),
                 ApplicationStageHistory.duration_in_prev_status.is_not(None),
             )
@@ -235,4 +260,94 @@ async def dashboard(db: AsyncSession) -> dict:
         "channels": await channels(db),
         "cycle": await cycle(db),
         "generated_at": utcnow(),
+    }
+
+
+# ---------------------------------------------------------------- SLA 监控（RA-04）
+def sla_thresholds() -> dict[str, int]:
+    """各阶段允许停留的小时数，可通过环境变量调整"""
+    from app.core.config import settings
+
+    return {
+        APP_NEW: settings.SLA_HOURS_NEW,
+        APP_SCREENING: settings.SLA_HOURS_SCREENING,
+        APP_INTERVIEW: settings.SLA_HOURS_INTERVIEW,
+        APP_OFFER: settings.SLA_HOURS_OFFER,
+    }
+
+
+async def sla(db: AsyncSession) -> dict:
+    """
+    超时环节：当前停留在某个阶段超过阈值即告警
+
+    hired / rejected 是终态，不计入 SLA。
+    """
+    from app.models.candidate import Candidate
+
+    thresholds = sla_thresholds()
+    now = utcnow()
+    rows = (
+        await db.execute(
+            select(
+                Application.id,
+                Application.job_id,
+                Application.candidate_id,
+                Application.status,
+                Application.stage_entered_at,
+            ).where(
+                _app_company(), Application.status.in_(tuple(thresholds))
+            )
+        )
+    ).all()
+
+    job_ids = {row.job_id for row in rows}
+    candidate_ids = {row.candidate_id for row in rows}
+    titles: dict[int, str] = {}
+    names: dict[int, str] = {}
+    if job_ids:
+        titles = {
+            job_id: title
+            for job_id, title in (
+                await db.execute(select(Job.id, Job.title).where(Job.id.in_(job_ids)))
+            ).all()
+        }
+    if candidate_ids:
+        names = {
+            candidate_id: name
+            for candidate_id, name in (
+                await db.execute(
+                    select(Candidate.id, Candidate.name).where(Candidate.id.in_(candidate_ids))
+                )
+            ).all()
+        }
+
+    items: list[dict] = []
+    for row in rows:
+        limit = thresholds.get(row.status)
+        if limit is None or row.stage_entered_at is None:
+            continue
+        hours = (now - row.stage_entered_at).total_seconds() / 3600
+        if hours <= limit:
+            continue
+        items.append(
+            {
+                "application_id": row.id,
+                "job_id": row.job_id,
+                "job_title": titles.get(row.job_id),
+                "candidate_id": row.candidate_id,
+                "candidate_name": names.get(row.candidate_id),
+                "status": row.status,
+                "status_label": _label(row.status),
+                "hours_in_stage": round(hours, 1),
+                "limit_hours": limit,
+                "overdue_hours": round(hours - limit, 1),
+            }
+        )
+
+    items.sort(key=lambda item: item["overdue_hours"], reverse=True)
+    return {
+        "thresholds": thresholds,
+        "total": len(items),
+        "items": items,
+        "generated_at": now,
     }

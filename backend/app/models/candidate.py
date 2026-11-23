@@ -86,8 +86,9 @@ class ResumeFile(IdMixin, TimestampMixin, CompanyScopedMixin, Base):
 
     __tablename__ = "resume_file"
     __table_args__ = (
-        # 同一文件内容全局唯一：重复上传直接复用，不再解析
-        UniqueConstraint("sha256", name="uq_resume_file_sha256"),
+        # 同一公司内文件内容唯一：重复上传直接复用，不再解析；
+        # 不同公司可各自收录同一份简历
+        UniqueConstraint("company_id", "sha256", name="uq_resume_file_company_sha"),
     )
 
     candidate_id: Mapped[int | None] = mapped_column(BigInteger, index=True,

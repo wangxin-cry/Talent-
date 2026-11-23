@@ -92,6 +92,58 @@ class CandidateListOut(BaseModel):
     total: int
 
 
+class CandidateApplicationOut(BaseModel):
+    """候选人的应聘记录（360° 详情页）"""
+
+    id: int
+    job_id: int
+    job_title: str
+    department: str | None = None
+    status: str
+    status_label: str
+    source: str | None = None
+    match_score: float | None = None
+    applied_at: datetime
+    stage_entered_at: datetime
+    rejected_reason: str | None = None
+    hired_at: datetime | None = None
+    question_count: int = 0
+
+
+class CandidateMatchOut(BaseModel):
+    """候选人在各职位上的匹配结果"""
+
+    id: int
+    job_id: int
+    job_title: str
+    score: float
+    skill_score: float | None = None
+    exp_score: float | None = None
+    edu_score: float | None = None
+    matched_skills: list[str] = []
+    missing_skills: list[str] = []
+    summary: str | None = None
+    feedback: str | None = None
+    create_time: datetime
+
+
+class CandidateTimelineItemOut(BaseModel):
+    """候选人时间线：上传、解析、加入流程、阶段流转"""
+
+    time: datetime
+    kind: str
+    title: str
+    description: str | None = None
+    application_id: int | None = None
+    job_id: int | None = None
+
+
+class CandidateOverviewOut(CandidateDetailOut):
+    applications: list[CandidateApplicationOut] = []
+    matches: list[CandidateMatchOut] = []
+    timeline: list[CandidateTimelineItemOut] = []
+
+
 class UploadItemOut(BaseModel):
     file_id: int | None = None
     original_name: str

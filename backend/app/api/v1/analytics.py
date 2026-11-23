@@ -1,7 +1,11 @@
 """数据分析与成本监控接口"""
 from __future__ import annotations
 
+from datetime import datetime
+from urllib.parse import quote
+
 from fastapi import APIRouter, Query
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,9 +16,11 @@ from app.schemas.analytics import (
     AiCallOut,
     CostSummaryOut,
     DashboardOut,
+    SlaOut,
 )
 from app.services import analytics as analytics_svc
 from app.services import costs as cost_svc
+from app.services import reports as report_svc
 
 router = APIRouter(tags=["数据分析与成本"])
 
@@ -26,6 +32,28 @@ router = APIRouter(tags=["数据分析与成本"])
 )
 async def dashboard_api(db: DbSession, _: CurrentUser) -> DashboardOut:
     return DashboardOut(**await analytics_svc.dashboard(db))
+
+
+@router.get(
+    "/analytics/sla",
+    response_model=SlaOut,
+    summary="SLA 超时监控（RA-04）",
+)
+async def sla_api(db: DbSession, _: CurrentUser) -> SlaOut:
+    return SlaOut(**await analytics_svc.sla(db))
+
+
+@router.get("/analytics/export", summary="导出招聘数据报表（Excel，DA-05）")
+async def export_api(db: DbSession, _: CurrentUser) -> Response:
+    content = await report_svc.build_workbook(db)
+    filename = f"talentmatch-report-{datetime.now():%Y%m%d%H%M}.xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}; filename*=UTF-8''{quote(filename)}"
+        },
+    )
 
 
 @router.get("/costs/summary", response_model=CostSummaryOut, summary="成本汇总与预算告警")

@@ -142,7 +142,11 @@ class FaissStore:
         if not self.path.exists():
             return
         try:
-            loaded = faiss.read_index(str(self.path))
+            # 用 serialize/deserialize 走内存，避免 FAISS 的 C++ 文件接口
+            # 在含中文/空格的路径（如 F:\桌面\...）上打不开文件
+            loaded = faiss.deserialize_index(
+                np.frombuffer(self.path.read_bytes(), dtype="uint8")
+            )
             if loaded.d != self.dim:
                 raise ValueError(f"索引维度 {loaded.d} 与配置 {self.dim} 不一致")
             self._index = loaded
@@ -184,7 +188,8 @@ class FaissStore:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        faiss.write_index(self._index, str(tmp))
+        # 同样避开 C++ 文件接口：先序列化到内存，再用 Python 写文件
+        tmp.write_bytes(faiss.serialize_index(self._index).tobytes())
         os.replace(tmp, self.path)
 
 

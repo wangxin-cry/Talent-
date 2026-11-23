@@ -15,8 +15,9 @@ from app.schemas.application import (
 )
 from app.services import interview_questions as question_svc
 from app.services import pipeline
-from app.services import rag
+from app.services import scope
 from app.services.job import get_job_or_404
+from app.services.queue import enqueue_index_questions
 
 router = APIRouter(prefix="/applications", tags=["招聘流程"])
 
@@ -30,24 +31,28 @@ router = APIRouter(prefix="/applications", tags=["招聘流程"])
 async def create_api(
     data: ApplicationCreateIn, db: DbSession, user: CurrentUser
 ) -> ApplicationDetailOut:
+    job = await get_job_or_404(db, data.job_id)
+    scope.ensure_job_access(user, job)
     return await pipeline.create_application(db, data, user.id)
 
 
 @router.get("/board", response_model=BoardOut, summary="招聘流程看板（按状态分列）")
 async def board_api(
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     job_id: int = Query(..., description="职位 id"),
 ) -> BoardOut:
     job = await get_job_or_404(db, job_id)
+    scope.ensure_job_access(user, job)
     return await pipeline.list_board(db, job)
 
 
 @router.get("/{application_id}", response_model=ApplicationDetailOut, summary="应聘详情")
 async def detail_api(
-    application_id: int, db: DbSession, _: CurrentUser
+    application_id: int, db: DbSession, user: CurrentUser
 ) -> ApplicationDetailOut:
     application = await pipeline.get_application_or_404(db, application_id)
+    await scope.ensure_application_access(db, user, application)
     return await pipeline.build_detail(db, application)
 
 
@@ -62,6 +67,8 @@ async def transition_api(
     db: DbSession,
     user: CurrentUser,
 ) -> ApplicationDetailOut:
+    application = await pipeline.get_application_or_404(db, application_id)
+    await scope.ensure_application_access(db, user, application)
     return await pipeline.transition_by_payload(db, application_id, payload, user.id)
 
 
@@ -71,9 +78,10 @@ async def transition_api(
     summary="状态流转时间线",
 )
 async def timeline_api(
-    application_id: int, db: DbSession, _: CurrentUser
+    application_id: int, db: DbSession, user: CurrentUser
 ) -> TimelineOut:
     application = await pipeline.get_application_or_404(db, application_id)
+    await scope.ensure_application_access(db, user, application)
     return await pipeline.get_timeline(db, application)
 
 
@@ -83,9 +91,10 @@ async def timeline_api(
     summary="读取已生成的面试题",
 )
 async def list_questions_api(
-    application_id: int, db: DbSession, _: CurrentUser
+    application_id: int, db: DbSession, user: CurrentUser
 ) -> QuestionSetOut:
     application = await pipeline.get_application_or_404(db, application_id)
+    await scope.ensure_application_access(db, user, application)
     return await question_svc.list_questions(db, application)
 
 
@@ -98,10 +107,11 @@ async def generate_questions_api(
     application_id: int,
     payload: QuestionGenerateIn,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     background: BackgroundTasks,
 ) -> QuestionSetOut:
     application = await pipeline.get_application_or_404(db, application_id)
+    await scope.ensure_application_access(db, user, application)
     result = await question_svc.generate_questions(
         db,
         application,
@@ -109,5 +119,5 @@ async def generate_questions_api(
         use_rag=payload.use_rag,
         force=payload.force,
     )
-    background.add_task(rag.index_questions_task, application.id)
+    enqueue_index_questions(background, application.id)
     return result

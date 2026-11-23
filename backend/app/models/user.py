@@ -15,28 +15,36 @@ from sqlalchemy import BigInteger, DateTime, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-from app.models.base import CompanyScopedMixin, IdMixin, TimestampMixin
+from app.models.base import IdMixin, TimestampMixin
 
 ROLE_RECRUITER = "recruiter"
 ROLE_MANAGER = "manager"
 ROLE_ADMIN = "admin"
+ROLE_SUPERADMIN = "superadmin"  # 平台超管：跨公司管理，不参与业务数据
 
 STATUS_ACTIVE = "active"
 STATUS_DISABLED = "disabled"
+STATUS_DELETED = "deleted"
 
 
-class User(IdMixin, TimestampMixin, CompanyScopedMixin, Base):
+class User(IdMixin, TimestampMixin, Base):
     """用户"""
 
     __tablename__ = "user"
     __table_args__ = (Index("ix_user_company_role", "company_id", "role"),)
 
+    # 所属公司；平台超管为空
+    company_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
+
     name: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    nickname: Mapped[str | None] = mapped_column(String(50), comment="展示昵称，不影响登录账号")
+    bio: Mapped[str | None] = mapped_column(String(255), comment="个人简介")
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     password: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), default=ROLE_RECRUITER, nullable=False, index=True)
+    department: Mapped[str | None] = mapped_column(String(100), index=True, comment="所属部门，manager 的数据范围依据")
     phone: Mapped[str | None] = mapped_column(String(30))
-    avatar_url: Mapped[str | None] = mapped_column(String(500))
+    avatar_key: Mapped[str | None] = mapped_column(String(500), comment="头像对象存储 key；URL 由后端生成")
     status: Mapped[str] = mapped_column(String(20), default=STATUS_ACTIVE, nullable=False, index=True)
 
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime)

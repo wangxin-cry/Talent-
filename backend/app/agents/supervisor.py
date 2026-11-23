@@ -25,6 +25,7 @@ from app.agents.subagents import AgentOutcome, DependencyMissing
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import sha256_hex
+from app.core.tenant import require_company_id
 from app.models.agent_trace import (
     AGENT_ANALYTICS,
     AGENT_INTERVIEW,
@@ -148,7 +149,7 @@ async def run_orchestration(
     candidate_id = payload.candidate_id
     if payload.intent == "interview" and payload.application_id:
         application = await db.get(Application, payload.application_id)
-        if application is None:
+        if application is None or application.company_id != require_company_id():
             raise OrchestrationError("应聘记录不存在")
         job_id = job_id or application.job_id
         candidate_id = candidate_id or application.candidate_id

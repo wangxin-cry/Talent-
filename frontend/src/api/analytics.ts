@@ -99,8 +99,38 @@ export interface CostSummary {
   top_jobs: JobCost[]
 }
 
+export interface SlaItem {
+  application_id: number
+  job_id: number
+  job_title: string | null
+  candidate_id: number
+  candidate_name: string | null
+  status: string
+  status_label: string
+  hours_in_stage: number
+  limit_hours: number
+  overdue_hours: number
+}
+
+export interface SlaResult {
+  thresholds: Record<string, number>
+  total: number
+  items: SlaItem[]
+  generated_at: string
+}
+
 export async function getDashboard(): Promise<Dashboard> {
   const { data } = await client.get<Dashboard>('/analytics/dashboard')
+  return data
+}
+
+export async function getSla(): Promise<SlaResult> {
+  const { data } = await client.get<SlaResult>('/analytics/sla')
+  return data
+}
+
+export async function downloadReport(): Promise<Blob> {
+  const { data } = await client.get('/analytics/export', { responseType: 'blob' })
   return data
 }
 

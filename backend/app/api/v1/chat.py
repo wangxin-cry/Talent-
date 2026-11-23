@@ -24,6 +24,7 @@ from app.chat import (
 from app.chat.engine import message_out
 from app.chat.stream import get_task, start_task, stream_events
 from app.core.deps import CurrentUser, DbSession
+from app.core.tenant import require_company_id
 from app.models.chat import ChatMessage, ChatSession
 from app.schemas.chat import (
     ChatConfirmIn,
@@ -105,7 +106,7 @@ async def create_session_api(
 ) -> ChatSessionOut:
     session = ChatSession(
         user_id=user.id,
-        company_id=1,
+        company_id=require_company_id(),
         title=payload.title,
         context_job_id=payload.context_job_id,
         context_candidate_id=payload.context_candidate_id,

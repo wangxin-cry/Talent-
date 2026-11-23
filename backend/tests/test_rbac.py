@@ -44,7 +44,14 @@ def _set_role(name: str, role: str) -> None:
 
 def _register_and_login(client, email_capture, name: str, email: str) -> dict:
     resp = client.post(
-        PREFIX + "/register", json={"name": name, "email": email, "password": "Passw0rd!"}
+        PREFIX + "/register",
+        json={
+            "name": name,
+            "email": email,
+            "password": "Passw0rd!",
+            "mode": "join",
+            "invite_code": "TESTJOIN",
+        },
     )
     assert resp.status_code == 201, resp.text
     token = email_capture["verify"][-1].split("token=", 1)[1]

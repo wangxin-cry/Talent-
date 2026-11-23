@@ -29,8 +29,10 @@ from app.core.security import (
 )
 from app.models.auth_token import PURPOSE_RESET_PASSWORD, PURPOSE_VERIFY_EMAIL, AuthToken
 from app.models.base import utcnow
-from app.models.user import ROLE_RECRUITER, STATUS_ACTIVE, User
-from app.schemas.auth import RegisterIn
+from app.models.company import STATUS_ACTIVE as COMPANY_ACTIVE, Company
+from app.models.user import ROLE_ADMIN, STATUS_ACTIVE, User
+from app.schemas.auth import ProfileUpdateIn, RegisterIn, UserOut
+from app.services import audit, company as company_service
 from app.services.email import send_reset_password_email, send_verification_email
 
 MAX_LOGIN_FAILS = 5
@@ -60,9 +62,9 @@ async def register_user(db: AsyncSession, data: RegisterIn) -> User:
     """
     注册用户
 
-    角色固定 recruiter（manager / admin 由管理员后续创建）。
-    注册后一律处于"邮箱未验证"，必须先完成验证才能登录；
-    开发模式（未配置 SMTP）会把验证链接打印到后端控制台。
+    - mode=create：新建公司，注册者自动成为该公司管理员
+    - mode=join：凭邀请码加入已有公司，身份由注册者选择（招聘专员 / 用人经理）
+    admin 不允许自助加入，平台超管由初始化脚本创建。
     """
     email = data.email.strip().lower()
 
@@ -72,15 +74,26 @@ async def register_user(db: AsyncSession, data: RegisterIn) -> User:
     if exists.scalar_one_or_none() is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名或邮箱已被注册")
 
+    if data.mode == "create":
+        company = await company_service.create_company(db, data.company_name or "")
+        role = ROLE_ADMIN
+    else:
+        company = await company_service.get_by_invite(db, data.invite_code or "")
+        role = data.role
+
     user = User(
         name=data.name,
         email=email,
         password=hash_password(data.password),
-        role=ROLE_RECRUITER,
+        role=role,
+        company_id=company.id,
         status=STATUS_ACTIVE,
     )
 
     db.add(user)
+    await db.flush()
+    if company.created_by is None:
+        company.created_by = user.id
     await db.commit()
     await db.refresh(user)
 
@@ -115,6 +128,13 @@ async def authenticate(db: AsyncSession, account: str, password: str) -> User:
 
     if user.status != STATUS_ACTIVE:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已被禁用")
+
+    if user.company_id is not None:
+        company = await db.get(Company, user.company_id)
+        if company is None or company.status != COMPANY_ACTIVE:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="所属公司已停用，请联系平台管理员"
+            )
 
     if user.email_verified_at is None:
         raise HTTPException(
@@ -175,6 +195,53 @@ async def logout(db: AsyncSession, user: User) -> None:
     """登出：令牌版本 +1，该用户已签发的 access / refresh 全部失效"""
     user.token_version += 1
     await db.commit()
+
+
+async def update_profile(
+    db: AsyncSession, user: User, payload: ProfileUpdateIn
+) -> User:
+    """修改个人资料；登录名与邮箱不在这里改"""
+    def clean(value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    before = {
+        "nickname": user.nickname,
+        "phone": user.phone,
+        "bio": user.bio,
+    }
+    user.nickname = clean(payload.nickname)
+    user.phone = clean(payload.phone)
+    user.bio = clean(payload.bio)
+
+    await audit.write_audit(
+        db,
+        action="user.profile.update",
+        target_type="user",
+        target_id=user.id,
+        user_id=user.id,
+        detail={
+            "before": before,
+            "after": {
+                "nickname": user.nickname,
+                "phone": user.phone,
+                "bio": user.bio,
+            },
+        },
+    )
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+def to_user_out(user: User) -> UserOut:
+    """把用户转成前端模型；头像 URL 由 avatar_key 生成，避免预签名 URL 过期"""
+    data = UserOut.model_validate(user)
+    if user.avatar_key:
+        version = user.avatar_key.rsplit("/", 1)[-1].split(".", 1)[0][:8]
+        data.avatar_url = f"{settings.API_PREFIX}/auth/avatar/{user.id}?v={version}"
+    return data
 
 
 # ---------------------------------------------------------------- 邮箱验证

@@ -48,7 +48,13 @@ def _auth_headers(client, email_capture, suffix: str) -> dict[str, str]:
     email = f"job_{suffix}@example.com"
     resp = client.post(
         f"{PREFIX}/auth/register",
-        json={"name": name, "email": email, "password": "Passw0rd!"},
+        json={
+            "name": name,
+            "email": email,
+            "password": "Passw0rd!",
+            "mode": "join",
+            "invite_code": "TESTJOIN",
+        },
     )
     assert resp.status_code == 201, resp.text
     token = email_capture["verify"][-1].split("token=", 1)[1]

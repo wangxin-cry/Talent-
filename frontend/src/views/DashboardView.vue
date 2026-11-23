@@ -3,10 +3,12 @@ import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import * as analyticsApi from '@/api/analytics'
-import type { Dashboard } from '@/api/analytics'
+import type { Dashboard, SlaResult } from '@/api/analytics'
 
 const data = ref<Dashboard | null>(null)
+const sla = ref<SlaResult | null>(null)
 const loading = ref(false)
+const exporting = ref(false)
 
 const overview = computed(() => data.value?.overview)
 const forwardStages = computed(
@@ -49,12 +51,40 @@ function cycleDays(value: number | null | undefined): string {
 async function load() {
   loading.value = true
   try {
-    data.value = await analyticsApi.getDashboard()
+    const [dashboard, slaResult] = await Promise.all([
+      analyticsApi.getDashboard(),
+      analyticsApi.getSla(),
+    ])
+    data.value = dashboard
+    sla.value = slaResult
   } catch (e: any) {
     ElMessage.error(e.message || '加载数据看板失败')
   } finally {
     loading.value = false
   }
+}
+
+async function exportReport() {
+  exporting.value = true
+  try {
+    const blob = await analyticsApi.downloadReport()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `talentmatch-report-${new Date().toISOString().slice(0, 10)}.xlsx`
+    link.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('报表已开始下载')
+  } catch (e: any) {
+    ElMessage.error(e.message || '导出报表失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
+function hoursText(hours: number): string {
+  if (hours < 24) return `${hours.toFixed(1)} 小时`
+  return `${(hours / 24).toFixed(1)} 天`
 }
 
 onMounted(load)
@@ -69,6 +99,7 @@ onMounted(load)
       </div>
       <div class="header-actions">
         <el-button @click="load">刷新</el-button>
+        <el-button :loading="exporting" @click="exportReport">导出 Excel</el-button>
         <el-button type="primary" plain @click="$router.push('/costs')">查看成本</el-button>
       </div>
     </div>
@@ -95,6 +126,32 @@ onMounted(load)
           <span class="kpi-value">{{ cycleDays(overview.avg_cycle_days) }}</span>
           <span class="kpi-hint">投递到入职，已入职样本</span>
         </article>
+      </section>
+
+      <section v-if="sla && sla.total" class="sla-panel">
+        <div class="panel-head">
+          <h3>SLA 超时提醒（{{ sla.total }}）</h3>
+          <span class="panel-hint">超过阶段阈值仍未推进，建议优先处理</span>
+        </div>
+        <div class="sla-list">
+          <div
+            v-for="item in sla.items.slice(0, 8)"
+            :key="item.application_id"
+            class="sla-item"
+            @click="$router.push(`/applications/${item.application_id}/prep`)"
+          >
+            <div class="sla-main">
+              <strong>{{ item.candidate_name || '候选人' }}</strong>
+              <span class="sla-job">{{ item.job_title || '职位已下线' }}</span>
+            </div>
+            <el-tag size="small" type="warning" effect="plain">{{ item.status_label }}</el-tag>
+            <span class="sla-time">
+              已停留 {{ hoursText(item.hours_in_stage) }}
+              <em>超 {{ hoursText(item.overdue_hours) }}</em>
+            </span>
+          </div>
+        </div>
+        <p v-if="sla.total > 8" class="muted">仅展示超时最久的 8 条，完整数据见导出的 Excel。</p>
       </section>
 
       <div class="panel-grid">
@@ -246,6 +303,59 @@ onMounted(load)
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
   gap: 14px;
   margin-bottom: 14px;
+}
+.sla-panel {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin-bottom: 14px;
+}
+.sla-list {
+  display: flex;
+  flex-direction: column;
+}
+.sla-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px dashed #fde68a;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.sla-item:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.sla-item:hover .sla-main strong {
+  color: var(--primary);
+}
+.sla-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.sla-main strong {
+  font-size: 13px;
+}
+.sla-job {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sla-time {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sla-time em {
+  color: #b45309;
+  font-style: normal;
+  font-weight: 650;
 }
 .panel {
   background: var(--panel);

@@ -29,7 +29,9 @@ async def healthz() -> dict:
     except Exception as exc:  # noqa: BLE001
         storage_ok, storage_detail = False, f"{type(exc).__name__}: {exc}"
 
-    all_ok = db_ok and storage_ok
+    queue_info = await _check_queue()
+
+    all_ok = db_ok and storage_ok and queue_info["ok"]
     return {
         "status": "ok" if all_ok else "degraded",
         "app": settings.APP_NAME,
@@ -38,5 +40,23 @@ async def healthz() -> dict:
         "components": {
             "database": {"ok": db_ok, "detail": db_detail, "backend": "sqlite" if settings.is_sqlite else "postgresql"},
             "storage": {"ok": storage_ok, "detail": storage_detail, "backend": settings.STORAGE_BACKEND},
+            "queue": queue_info,
         },
     }
+
+
+async def _check_queue() -> dict:
+    """队列健康状态：memory 恒可用；celery 需要 Redis 可达"""
+    if not settings.celery_enabled:
+        return {"ok": True, "backend": "memory", "detail": "进程内 BackgroundTasks"}
+    try:
+        from redis.asyncio import Redis
+
+        client = Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        try:
+            pong = await client.ping()
+        finally:
+            await client.aclose()
+        return {"ok": bool(pong), "backend": "celery", "detail": settings.REDIS_URL}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "backend": "celery", "detail": f"{type(exc).__name__}: {exc}"}

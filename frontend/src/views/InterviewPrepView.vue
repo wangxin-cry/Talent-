@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import * as appApi from '@/api/applications'
+import * as interviewApi from '@/api/interviews'
 import type { ApplicationDetail, Question, RagSource } from '@/api/applications'
+import type { EvaluationTemplate, FeedbackSummary, InterviewSchedule } from '@/api/interviews'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,6 +20,23 @@ const ragUsed = ref(false)
 const useRag = ref(true)
 const loading = ref(false)
 const generating = ref(false)
+
+// ---------------- 面试安排 / 评估 ----------------
+const schedule = ref<InterviewSchedule | null>(null)
+const scheduleForm = reactive({
+  scheduled_at: '',
+  duration_minutes: 60,
+  mode: 'online',
+  location: '',
+  interviewer: '',
+  note: '',
+})
+const savingSchedule = ref(false)
+const template = ref<EvaluationTemplate | null>(null)
+const feedbacks = ref<FeedbackSummary | null>(null)
+const scores = reactive<Record<string, number>>({})
+const feedbackForm = reactive({ round: 1, recommendation: 'hire', comment: '' })
+const submittingFeedback = ref(false)
 
 const EDU_CN: Record<string, string> = {
   college: '大专',
@@ -96,6 +115,105 @@ async function load() {
     ElMessage.error(e.message || '加载面试准备信息失败')
   } finally {
     loading.value = false
+  }
+  void loadInterview()
+}
+
+// ---------------- 面试安排 / 评估 ----------------
+/** 后端存 UTC（无时区），展示时补 Z 再转本地 */
+function utcToLocalInput(value?: string | null): string {
+  if (!value) return ''
+  const date = new Date(`${value}Z`)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function formatUtcLocal(value?: string | null): string {
+  if (!value) return '-'
+  const date = new Date(`${value}Z`)
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+async function loadInterview() {
+  try {
+    const [saved, tpl, feedbackSummary] = await Promise.all([
+      interviewApi.getSchedule(applicationId),
+      interviewApi.getEvaluationTemplate(),
+      interviewApi.listFeedbacks(applicationId),
+    ])
+    schedule.value = saved
+    if (saved) {
+      scheduleForm.scheduled_at = utcToLocalInput(saved.scheduled_at)
+      scheduleForm.duration_minutes = saved.duration_minutes
+      scheduleForm.mode = saved.mode
+      scheduleForm.location = saved.location || ''
+      scheduleForm.interviewer = saved.interviewer || ''
+      scheduleForm.note = saved.note || ''
+    }
+    template.value = tpl
+    feedbacks.value = feedbackSummary
+    for (const dimension of tpl.dimensions) {
+      if (!scores[dimension.key]) scores[dimension.key] = 3
+    }
+  } catch (e: any) {
+    ElMessage.warning(e.message || '加载面试安排失败')
+  }
+}
+
+async function saveSchedule() {
+  if (!scheduleForm.scheduled_at) {
+    ElMessage.warning('请选择面试时间')
+    return
+  }
+  savingSchedule.value = true
+  try {
+    const utc = new Date(scheduleForm.scheduled_at).toISOString().slice(0, 19)
+    schedule.value = await interviewApi.saveSchedule(applicationId, {
+      scheduled_at: utc,
+      duration_minutes: scheduleForm.duration_minutes,
+      mode: scheduleForm.mode,
+      location: scheduleForm.location || null,
+      interviewer: scheduleForm.interviewer || null,
+      note: scheduleForm.note || null,
+    })
+    ElMessage.success('面试安排已保存')
+  } catch (e: any) {
+    ElMessage.error(e.message || '保存面试安排失败')
+  } finally {
+    savingSchedule.value = false
+  }
+}
+
+async function downloadIcs() {
+  try {
+    const blob = await interviewApi.downloadIcs(applicationId)
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `interview-${applicationId}.ics`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (e: any) {
+    ElMessage.error(e.message || '下载日历失败')
+  }
+}
+
+async function submitFeedback() {
+  submittingFeedback.value = true
+  try {
+    await interviewApi.createFeedback(applicationId, {
+      round: feedbackForm.round,
+      scores: { ...scores },
+      recommendation: feedbackForm.recommendation,
+      comment: feedbackForm.comment || null,
+    })
+    feedbacks.value = await interviewApi.listFeedbacks(applicationId)
+    ElMessage.success('评估已提交')
+    feedbackForm.comment = ''
+  } catch (e: any) {
+    ElMessage.error(e.message || '提交评估失败')
+  } finally {
+    submittingFeedback.value = false
   }
 }
 
@@ -214,6 +332,96 @@ onMounted(load)
 
       <!-- 右：面试题 -->
       <main class="questions">
+        <section class="panel">
+          <div class="panel-head interview-head">
+            <h3>面试安排</h3>
+            <span class="panel-hint">
+              {{ schedule ? `已安排：${formatUtcLocal(schedule.scheduled_at)}` : '尚未安排面试' }}
+            </span>
+          </div>
+          <div class="schedule-grid">
+            <el-date-picker
+              v-model="scheduleForm.scheduled_at"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm"
+              placeholder="选择面试时间"
+            />
+            <el-select v-model="scheduleForm.mode">
+              <el-option label="线上" value="online" />
+              <el-option label="现场" value="onsite" />
+              <el-option label="电话" value="phone" />
+            </el-select>
+            <el-input-number
+              v-model="scheduleForm.duration_minutes"
+              :min="15"
+              :max="480"
+              :step="15"
+              controls-position="right"
+            />
+            <el-input v-model="scheduleForm.interviewer" placeholder="面试官" />
+            <el-input
+              v-model="scheduleForm.location"
+              class="span-2"
+              placeholder="地点 / 会议链接"
+            />
+            <el-input v-model="scheduleForm.note" class="span-2" placeholder="备注（可选）" />
+          </div>
+          <div class="schedule-actions">
+            <el-button type="primary" :loading="savingSchedule" @click="saveSchedule">保存安排</el-button>
+            <el-button :disabled="!schedule" @click="downloadIcs">下载日历 (.ics)</el-button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head interview-head">
+            <h3>面试评估</h3>
+            <span v-if="feedbacks && feedbacks.total" class="panel-hint">
+              已记录 {{ feedbacks.total }} 份 · 平均 {{ feedbacks.average_rating ?? '-' }} 分 · 结论
+              {{ feedbacks.recommendation_label || '-' }}
+            </span>
+            <span v-else class="panel-hint">按维度打分并给出结论，沉淀面试记录</span>
+          </div>
+          <div v-if="template" class="score-grid">
+            <div v-for="dimension in template.dimensions" :key="dimension.key" class="score-item">
+              <div class="score-head">
+                <span>{{ dimension.name }}</span>
+                <el-rate v-model="scores[dimension.key]" :max="template.scale" />
+              </div>
+              <p class="score-desc">{{ dimension.description }}</p>
+            </div>
+          </div>
+          <div class="feedback-form">
+            <el-input-number v-model="feedbackForm.round" :min="1" :max="10" controls-position="right" />
+            <el-select v-model="feedbackForm.recommendation">
+              <el-option
+                v-for="item in template?.recommendations || []"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              />
+            </el-select>
+            <el-input v-model="feedbackForm.comment" class="feedback-comment" placeholder="面试评语" />
+            <el-button type="primary" :loading="submittingFeedback" @click="submitFeedback">提交评估</el-button>
+          </div>
+          <div v-if="feedbacks?.items.length" class="feedback-list">
+            <article v-for="item in feedbacks.items" :key="item.id" class="feedback-item">
+              <div class="feedback-line">
+                <strong>{{ item.interviewer_name || '面试官' }}</strong>
+                <span>第 {{ item.round }} 轮</span>
+                <el-tag
+                  size="small"
+                  :type="item.recommendation === 'no_hire' ? 'danger' : item.recommendation === 'hold' ? 'warning' : 'success'"
+                >
+                  {{ item.recommendation_label || '未结论' }}
+                </el-tag>
+                <span class="feedback-score">{{ item.overall_rating ?? '-' }} 分</span>
+                <span class="feedback-time">{{ formatUtcLocal(item.create_time) }}</span>
+              </div>
+              <p v-if="item.comment" class="feedback-text">{{ item.comment }}</p>
+            </article>
+          </div>
+        </section>
+
         <div class="questions-head">
           <div>
             <h3>面试题（{{ questions.length }}）</h3>
@@ -393,6 +601,120 @@ onMounted(load)
   border-radius: var(--radius);
   padding: 18px 20px;
   box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.questions > .panel {
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--line);
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0 0 16px;
+}
+.questions > .panel:last-of-type {
+  border-bottom: none;
+}
+.interview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.interview-head h3 {
+  margin: 0;
+  font-size: 14.5px;
+}
+.panel-hint {
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.schedule-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.schedule-grid .span-2 {
+  grid-column: span 2;
+}
+.schedule-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.score-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+}
+.score-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.score-desc {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.feedback-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.feedback-comment {
+  flex: 1;
+  min-width: 220px;
+}
+.feedback-list {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.feedback-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fafbff;
+}
+.feedback-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  flex-wrap: wrap;
+}
+.feedback-score {
+  font-weight: 700;
+}
+.feedback-time {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+.feedback-text {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+@media (max-width: 960px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .schedule-grid,
+  .score-grid {
+    grid-template-columns: 1fr;
+  }
+  .schedule-grid .span-2 {
+    grid-column: span 1;
+  }
 }
 .questions-head {
   display: flex;

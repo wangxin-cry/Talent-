@@ -16,7 +16,6 @@ async def write_audit(
     detail: dict | None = None,
 ) -> None:
     db.add(AuditLog(
-        company_id=1,
         action=action,
         target_type=target_type,
         target_id=target_id,

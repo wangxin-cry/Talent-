@@ -132,6 +132,25 @@ class Settings(BaseSettings):
     LLM_PRICE_INPUT_PER_1K: float = 0.002
     LLM_PRICE_OUTPUT_PER_1K: float = 0.008
 
+    # ---------- 安全 / 限流（PRD §8.3：每用户 100 次/分钟） ----------
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_PER_MINUTE: int = 100
+
+    # ---------- 前端静态托管（单端口部署） ----------
+    SERVE_FRONTEND: bool = False
+    FRONTEND_DIST: str = ""  # 留空则使用 <repo>/frontend/dist
+
+    # ---------- 任务队列 ----------
+    QUEUE_MODE: str = "memory"  # memory=进程内 BackgroundTasks；celery=Redis 队列
+    REDIS_URL: str = "redis://127.0.0.1:6379/0"
+    CELERY_TASK_TIME_LIMIT: int = 600  # 单个任务硬超时（秒）
+
+    # ---------- SLA 监控（PRD RA-04，各阶段允许停留小时数） ----------
+    SLA_HOURS_NEW: int = 24
+    SLA_HOURS_SCREENING: int = 48
+    SLA_HOURS_INTERVIEW: int = 72
+    SLA_HOURS_OFFER: int = 48
+
     # ---------- 助手属性 ----------
     @property
     def cors_origin_list(self) -> list[str]:
@@ -155,6 +174,11 @@ class Settings(BaseSettings):
     def email_enabled(self) -> bool:
         """是否配置了 SMTP（为空即开发模式）"""
         return bool(self.EMAIL_HOST.strip())
+
+    @property
+    def celery_enabled(self) -> bool:
+        """是否启用 Celery + Redis 队列"""
+        return self.QUEUE_MODE.strip().lower() == "celery"
 
     @property
     def email_from(self) -> str:

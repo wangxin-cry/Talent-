@@ -41,6 +41,11 @@ python-docx>=1.1
 pdfplumber>=0.11
 pillow>=10.3
 pymupdf>=1.24          # PDF 降级解析 + 扫描件渲染（缺少时自动跳过）
+openpyxl>=3.1          # DA-05 报表导出
+
+# ===== 任务队列（QUEUE_MODE=celery 时使用） =====
+celery[redis]>=5.4
+redis>=5.0
 
 # ===== 测试 =====
 pytest>=8

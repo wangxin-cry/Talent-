@@ -22,9 +22,10 @@ from app.schemas.job import (
     JobUpdateIn,
 )
 from app.services import job as job_service
-from app.services import rag
+from app.services import scope
 from app.services.jd_writer import generate_jd
 from app.services.job import STATUS_LABELS
+from app.services.queue import enqueue_index_job
 from app.services.skills import load_skill_map
 
 REVIEW_ROLES = {"manager", "admin"}
@@ -56,7 +57,7 @@ async def generate_jd_api(data: JDGenerateIn, db: DbSession, user: CurrentUser) 
 @router.get("", response_model=JobListOut, summary="职位列表")
 async def list_jobs_api(
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     status_filter: str | None = Query(default=None, alias="status"),
     q: str | None = Query(default=None, max_length=100),
     page: int = Query(default=1, ge=1),
@@ -73,6 +74,7 @@ async def list_jobs_api(
         q=q,
         skip=(page - 1) * page_size,
         limit=page_size,
+        scope=scope.job_scope_condition(user),
     )
     skill_map = await job_service.collect_skill_map(db, jobs)
     return JobListOut(
@@ -86,13 +88,14 @@ async def create_job_api(
     data: JobCreateIn, db: DbSession, user: CurrentUser, background: BackgroundTasks
 ) -> JobOut:
     job = await job_service.create_job(db, data, user.id)
-    background.add_task(rag.index_job_task, job.id)
+    enqueue_index_job(background, job.id)
     return await _to_out(db, job)
 
 
 @router.get("/{job_id}", response_model=JobOut, summary="职位详情")
-async def get_job_api(job_id: int, db: DbSession, _: CurrentUser) -> JobOut:
+async def get_job_api(job_id: int, db: DbSession, user: CurrentUser) -> JobOut:
     job = await job_service.get_job_or_404(db, job_id)
+    scope.ensure_job_access(user, job)
     return await _to_out(db, job)
 
 
@@ -101,12 +104,13 @@ async def update_job_api(
     job_id: int,
     data: JobUpdateIn,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     background: BackgroundTasks,
 ) -> JobOut:
     job = await job_service.get_job_or_404(db, job_id)
+    scope.ensure_job_manage(user, job)
     job = await job_service.update_job(db, job, data)
-    background.add_task(rag.index_job_task, job.id)
+    enqueue_index_job(background, job.id)
     return await _to_out(db, job)
 
 
@@ -120,14 +124,16 @@ async def publish_job_api(
             detail="招聘专员不能直接发布职位，请先提交审批",
         )
     job = await job_service.get_job_or_404(db, job_id)
+    scope.ensure_job_manage(user, job)
     job = await job_service.publish_job(db, job, user.id)
-    background.add_task(rag.index_job_task, job.id)
+    enqueue_index_job(background, job.id)
     return await _to_out(db, job)
 
 @router.post("/{job_id}/submit", response_model=JobOut, summary="提交审批")
-async def submit_job_api(job_id: int, db: DbSession, _: CurrentUser) -> JobOut:
+async def submit_job_api(job_id: int, db: DbSession, user: CurrentUser) -> JobOut:
     job = await job_service.get_job_or_404(db, job_id)
-    job = await job_service.submit_for_approval(db, job)
+    scope.ensure_job_manage(user, job)
+    job = await job_service.submit_for_approval(db, job, user.id)
     return await _to_out(db, job)
 
 @router.post("/{job_id}/approve", response_model=JobOut, summary="审批通过")
@@ -136,8 +142,9 @@ async def approve_job_api(
 ) -> JobOut:
     _require_reviewer(user)
     job = await job_service.get_job_or_404(db, job_id)
+    scope.ensure_job_review(user, job)
     job = await job_service.approve_job(db, job, user.id)
-    background.add_task(rag.index_job_task, job.id)
+    enqueue_index_job(background, job.id)
     return await _to_out(db, job)
 
 @router.post("/{job_id}/reject", response_model=JobOut, summary="驳回职位")
@@ -146,19 +153,22 @@ async def reject_job_api(
 ) -> JobOut:
     _require_reviewer(user)
     job = await job_service.get_job_or_404(db, job_id)
-    job = await job_service.reject_job(db, job, data.reason)
+    scope.ensure_job_review(user, job)
+    job = await job_service.reject_job(db, job, data.reason, user.id)
     return await _to_out(db, job)
 
 
 @router.post("/{job_id}/close", response_model=JobOut, summary="关闭职位")
-async def close_job_api(job_id: int, db: DbSession, _: CurrentUser) -> JobOut:
+async def close_job_api(job_id: int, db: DbSession, user: CurrentUser) -> JobOut:
     job = await job_service.get_job_or_404(db, job_id)
-    job = await job_service.change_status(db, job, STATUS_CLOSED)
+    scope.ensure_job_manage(user, job)
+    job = await job_service.change_status(db, job, STATUS_CLOSED, user.id)
     return await _to_out(db, job)
 
 
 @router.post("/{job_id}/archive", response_model=JobOut, summary="归档职位")
-async def archive_job_api(job_id: int, db: DbSession, _: CurrentUser) -> JobOut:
+async def archive_job_api(job_id: int, db: DbSession, user: CurrentUser) -> JobOut:
     job = await job_service.get_job_or_404(db, job_id)
-    job = await job_service.change_status(db, job, STATUS_ARCHIVED)
+    scope.ensure_job_manage(user, job)
+    job = await job_service.change_status(db, job, STATUS_ARCHIVED, user.id)
     return await _to_out(db, job)

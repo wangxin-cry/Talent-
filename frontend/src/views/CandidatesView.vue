@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadUserFile } from 'element-plus'
 
@@ -38,6 +39,12 @@ const EDUCATION_LABEL: Record<string, string> = {
 
 function fileStatus(status?: string | null) {
   return FILE_STATUS[status || ''] ?? { label: status || '未知', type: 'info' as const }
+}
+
+const router = useRouter()
+
+function openDetail(id: number) {
+  router.push(`/candidates/${id}`)
 }
 
 function educationText(value?: string | null): string {
@@ -386,7 +393,9 @@ onMounted(() => {
       <el-table v-loading="loading" :data="rows" class="table">
         <el-table-column label="候选人" min-width="150">
           <template #default="{ row }">
-            <div class="name">{{ row.name || '未识别' }}</div>
+            <button class="name-link" type="button" @click="openDetail(row.id)">
+              {{ row.name || '未识别' }}
+            </button>
             <div class="meta">#{{ row.id }}</div>
           </template>
         </el-table-column>
@@ -445,9 +454,10 @@ onMounted(() => {
             <span class="meta">{{ new Date(row.update_time).toLocaleDateString() }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="90" fixed="right">
+        <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openReview(row.id)">校对</el-button>
+            <el-button link type="primary" @click="openDetail(row.id)">详情</el-button>
+            <el-button link @click="openReview(row.id)">校对</el-button>
           </template>
         </el-table-column>
         <template #empty>
@@ -698,7 +708,19 @@ onMounted(() => {
 }
 .filters { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
 .table { width: 100%; }
-.name { font-weight: 600; }
+.name-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--primary);
+  cursor: pointer;
+  text-align: left;
+}
+.name-link:hover {
+  text-decoration: underline;
+}
 .meta { font-size: 12px; color: var(--muted); }
 .skill-tag { margin: 0 6px 4px 0; }
 .empty { color: var(--muted); padding: 24px 0; }

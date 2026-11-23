@@ -7,11 +7,15 @@ PDF 采用 pdfplumber 优先、PyMuPDF 降级的双引擎；
 from __future__ import annotations
 
 import io
+import re
+import zipfile
+import xml.etree.ElementTree as ET
 
 from loguru import logger
 
 MIN_TEXT_CHARS = 20
 MAX_TEXT_CHARS = 200_000
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
 class ParseError(RuntimeError):
@@ -86,6 +90,73 @@ def _pdf_fitz(data: bytes) -> tuple[str, int]:
         return "", 0
 
 
+def _docx_paragraphs(xml_bytes: bytes) -> list[str]:
+    """按段落提取一个 Word XML 部件里的全部文本（含文本框）"""
+    paragraphs: list[str] = []
+    buffer: list[str] = []
+    depth = 0
+    try:
+        for event, elem in ET.iterparse(io.BytesIO(xml_bytes), events=("start", "end")):
+            if elem.tag == f"{_W}p":
+                if event == "start":
+                    depth += 1
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        line = "".join(buffer).strip()
+                        if line:
+                            paragraphs.append(line)
+                        buffer = []
+                    elem.clear()
+            elif event == "end" and elem.tag == f"{_W}t":
+                if elem.text:
+                    buffer.append(elem.text)
+            elif event == "end" and elem.tag in (f"{_W}tab", f"{_W}br", f"{_W}cr"):
+                buffer.append(" ")
+    except ET.ParseError as exc:
+        logger.warning(f"DOCX XML 解析失败：{exc}")
+    return paragraphs
+
+
+def _docx_xml_text(data: bytes) -> str:
+    """
+    读取 DOCX 全部 XML 文本。
+
+    很多 Word 简历用文本框/页眉排版，python-docx 只能读到空段落；
+    直接遍历 w:t 可以把文本框里的正文也取出来。
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            names = archive.namelist()
+            targets = [name for name in ("word/document.xml",) if name in names]
+            targets += sorted(name for name in names if re.fullmatch(r"word/header\d+\.xml", name))
+            targets += sorted(name for name in names if re.fullmatch(r"word/footer\d+\.xml", name))
+            targets += [
+                name
+                for name in ("word/footnotes.xml", "word/endnotes.xml")
+                if name in names
+            ]
+
+            paragraphs: list[str] = []
+            for name in targets:
+                try:
+                    paragraphs.extend(_docx_paragraphs(archive.read(name)))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"DOCX 部件解析失败 {name}：{exc}")
+    except zipfile.BadZipFile:
+        return ""
+
+    seen: set[str] = set()
+    lines: list[str] = []
+    for paragraph in paragraphs:
+        line = " ".join(paragraph.split())
+        if not line or line in seen:
+            continue
+        seen.add(line)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _docx(data: bytes) -> tuple[str, str, dict]:
     try:
         from docx import Document
@@ -104,10 +175,23 @@ def _docx(data: bytes) -> tuple[str, str, dict]:
             if cells:
                 parts.append(" | ".join(cells))
 
-    return ensure_quality("\n".join(parts)), "python-docx", {
-        "engine": "python-docx",
+    body_text = "\n".join(parts).strip()
+    xml_text = _docx_xml_text(data)
+
+    # 文本框/页眉内容明显更多时以 XML 文本为准；普通 DOCX 仍保留表格分隔符
+    if len(xml_text) > max(MIN_TEXT_CHARS, int(len(body_text) * 1.15)):
+        text, parser = xml_text, "docx-xml"
+    else:
+        text, parser = body_text, "python-docx"
+
+    if not text:
+        raise ParseError("DOCX 中未提取到文字（可能是图片版简历），请上传 PDF 或手动录入")
+
+    return ensure_quality(text), parser, {
+        "engine": parser,
         "paragraphs": len(document.paragraphs),
         "tables": len(document.tables),
+        "xml_chars": len(xml_text),
     }
 
 

@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 _PASSWORD_HAS_LETTER = re.compile(r"[A-Za-z]")
 _PASSWORD_HAS_DIGIT = re.compile(r"\d")
@@ -25,6 +26,25 @@ class RegisterIn(BaseModel):
     name: str = Field(min_length=2, max_length=50, description="登录名，唯一")
     email: EmailStr
     password: str = Field(min_length=8, max_length=64)
+    mode: Literal["create", "join"] = Field(
+        default="join", description="create=新建公司（注册者成为公司管理员）；join=用邀请码加入"
+    )
+    company_name: str | None = Field(default=None, max_length=100, description="新建公司时的公司名称")
+    invite_code: str | None = Field(default=None, max_length=16, description="加入公司时的邀请码")
+    role: Literal["recruiter", "manager"] = Field(
+        default="recruiter", description="加入公司时的身份；新建公司时固定为公司管理员"
+    )
+
+    @model_validator(mode="after")
+    def _check_company_info(self):
+        if self.mode == "create":
+            if not (self.company_name or "").strip():
+                raise ValueError("请填写公司名称")
+        else:
+            if not (self.invite_code or "").strip():
+                raise ValueError("请填写公司邀请码")
+            self.invite_code = self.invite_code.strip().upper()
+        return self
 
     @field_validator("name")
     @classmethod
@@ -80,12 +100,25 @@ class UserOut(BaseModel):
 
     id: int
     name: str
+    nickname: str | None = None
     email: str
     role: str
+    department: str | None = None
+    phone: str | None = None
+    avatar_url: str | None = None
+    bio: str | None = None
     status: str
     email_verified: bool
     last_login_at: datetime | None = None
     create_time: datetime
+
+
+class ProfileUpdateIn(BaseModel):
+    """个人资料：登录名与邮箱不可在这里修改；头像走独立上传接口"""
+
+    nickname: str | None = Field(default=None, max_length=50)
+    phone: str | None = Field(default=None, max_length=30)
+    bio: str | None = Field(default=None, max_length=255)
 
 
 class TokenOut(BaseModel):
@@ -108,6 +141,20 @@ class AccessTokenOut(BaseModel):
 
 class MessageOut(BaseModel):
     message: str
+
+
+class CancelAccountIn(BaseModel):
+    """自助注销账号：需要登录密码二次确认"""
+
+    password: str = Field(min_length=1, max_length=128)
+
+
+class CancelAccountOut(BaseModel):
+    message: str
+    deleted_jobs: int
+    deleted_candidates: int
+    deleted_applications: int
+    deleted_files: int
 
 
 class RegisterOut(BaseModel):

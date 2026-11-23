@@ -8,6 +8,7 @@ pytest 全局配置
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -25,11 +26,15 @@ os.environ["STORAGE_BACKEND"] = "local"
 os.environ["LOCAL_STORAGE_DIR"] = str(_TMP / "uploads")
 os.environ["SECRET_KEY"] = "test-secret-key"
 os.environ["LLM_MOCK"] = "true"
+# 测试不托管前端构建产物，避免 SPA 兜底路由影响 API 断言
+os.environ["SERVE_FRONTEND"] = "false"
 # RAG 默认关闭：测试不应联网调用真实 embedding；需要时由 test_rag 自行打开
 os.environ["RAG_ENABLED"] = "false"
 os.environ["RAG_INDEX_ENABLED"] = "false"
 os.environ["VECTOR_BACKEND"] = "numpy"
 os.environ["FAISS_DIR"] = str(_TMP / "faiss")
+# 测试用进程内任务，不依赖 Redis / Celery worker
+os.environ["QUEUE_MODE"] = "memory"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -37,10 +42,19 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 @pytest.fixture(scope="session")
 def client() -> TestClient:
-    """带 lifespan 的测试客户端（会建表并初始化存储）"""
+    """带 lifespan 的测试客户端（会建表、初始化存储与默认公司）"""
     from app.main import app
 
     with TestClient(app) as c:
+        # 固定默认公司的邀请码，方便注册类测试复用它加入同一家公司
+        conn = sqlite3.connect(_TMP / "test.db")
+        try:
+            conn.execute(
+                "UPDATE company SET invite_code = 'TESTJOIN' WHERE id = 1"
+            )
+            conn.commit()
+        finally:
+            conn.close()
         yield c
 
 

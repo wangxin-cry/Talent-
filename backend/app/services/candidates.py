@@ -24,6 +24,12 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import decrypt_pii, encrypt_pii, normalize_phone, sha256_hex
 from app.core.storage import build_object_key, get_storage
+from app.core.tenant import get_company_id, require_company_id, set_company_id
+from app.models.application import (
+    APP_STATUS_LABELS,
+    Application,
+    ApplicationStageHistory,
+)
 from app.models.base import utcnow
 from app.models.candidate import (
     RF_FAILED,
@@ -34,15 +40,24 @@ from app.models.candidate import (
     Resume,
     ResumeFile,
 )
+from app.models.interview_question import InterviewQuestion
+from app.models.job import Job
+from app.models.match_result import MatchResult
+from app.models.user import ROLE_ADMIN, ROLE_MANAGER
 from app.schemas.candidate import (
+    CandidateApplicationOut,
     CandidateCreateIn,
     CandidateDetailOut,
+    CandidateMatchOut,
     CandidateOut,
+    CandidateOverviewOut,
+    CandidateTimelineItemOut,
     CandidateUpdateIn,
     FileStatusOut,
     ResumeFileOut,
 )
-from app.services import audit, vision
+from app.services import audit, scope, vision
+from app.services import notifications as notification_svc
 from app.services.parser import ParseError, ensure_quality, extract_text, render_pdf_images
 from app.services.resume_extract import extract_resume
 
@@ -116,15 +131,21 @@ def _item(
     }
 
 # ---------------------------------------------------------------- 查询
-async def _get_or_404(db: AsyncSession, candidate_id: int) -> Candidate:
+async def get_candidate_or_404(db: AsyncSession, candidate_id: int) -> Candidate:
     candidate = await db.get(Candidate, candidate_id)
-    if candidate is None or candidate.is_deleted:
+    company_id = get_company_id()
+    if (
+        candidate is None
+        or candidate.is_deleted
+        or (company_id is not None and candidate.company_id != company_id)
+    ):
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="候选人不存在")
     return candidate
 
 async def get_file_or_404(db: AsyncSession, file_id: int) -> ResumeFile:
     file = await db.get(ResumeFile, file_id)
-    if file is None:
+    company_id = get_company_id()
+    if file is None or (company_id is not None and file.company_id != company_id):
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="简历文件不存在")
     return file
 
@@ -172,8 +193,11 @@ async def list_candidates(
     q: str | None = None,
     skip: int = 0,
     limit: int = 20,
+    scope=None,
 ) -> tuple[list[CandidateOut], int]:
     conditions = [Candidate.is_deleted.is_(False)]
+    if scope is not None:
+        conditions.append(scope)
     if q and q.strip():
         keyword = f"%{q.strip()}%"
         conditions.append(or_(
@@ -198,7 +222,7 @@ async def list_candidates(
     return [_to_out(row, overview, masked=True) for row in rows], total
 
 async def get_candidate_detail(db: AsyncSession, candidate_id: int) -> CandidateDetailOut:
-    candidate = await _get_or_404(db, candidate_id)
+    candidate = await get_candidate_or_404(db, candidate_id)
     files = list((await db.execute(
         select(ResumeFile)
         .where(ResumeFile.candidate_id == candidate.id)
@@ -227,7 +251,12 @@ async def get_candidate_detail(db: AsyncSession, candidate_id: int) -> Candidate
 async def file_statuses(db: AsyncSession, ids: list[int]) -> list[FileStatusOut]:
     if not ids:
         return []
-    rows = (await db.execute(select(ResumeFile).where(ResumeFile.id.in_(ids)))).scalars().all()
+    rows = (await db.execute(
+        select(ResumeFile).where(
+            ResumeFile.id.in_(ids),
+            ResumeFile.company_id == require_company_id(),
+        )
+    )).scalars().all()
     return [
         FileStatusOut(
             id=row.id,
@@ -240,13 +269,14 @@ async def file_statuses(db: AsyncSession, ids: list[int]) -> list[FileStatusOut]
 
 # ---------------------------------------------------------------- 手工建档 / 校对
 async def create_candidate(db: AsyncSession, data: CandidateCreateIn, user_id: int) -> CandidateDetailOut:
+    company_id = require_company_id()
     phone = normalize_phone(data.phone)
     email = (data.email or "").strip().lower() or None
     key = _dedupe_key(phone, email, f"manual:{uuid.uuid4().hex}")
 
     existing = (await db.execute(
         select(Candidate).where(
-            Candidate.company_id == 1,
+            Candidate.company_id == company_id,
             Candidate.dedupe_key == key,
             Candidate.is_deleted.is_(False),
         )
@@ -257,7 +287,7 @@ async def create_candidate(db: AsyncSession, data: CandidateCreateIn, user_id: i
             detail="该手机号 / 邮箱已存在候选人，请直接校对已有记录",
         )
 
-    candidate = Candidate(company_id=1, dedupe_key=key, created_by=user_id, skills=[])
+    candidate = Candidate(company_id=company_id, dedupe_key=key, created_by=user_id, skills=[])
     candidate.name = data.name.strip()
     if phone:
         candidate.phone_enc = encrypt_pii(phone)
@@ -282,6 +312,15 @@ async def create_candidate(db: AsyncSession, data: CandidateCreateIn, user_id: i
         db, action="candidate.create", target_type="candidate",
         target_id=candidate.id, user_id=user_id, detail={"source": "manual"},
     )
+    await notification_svc.notify_roles(
+        db,
+        roles={ROLE_MANAGER, ROLE_ADMIN},
+        exclude_user_ids={user_id},
+        template="candidate_created",
+        subject="新增候选人",
+        body=f"候选人「{candidate.name}」已手工录入人才库。",
+        candidate_id=candidate.id,
+    )
     await db.commit()
     return await get_candidate_detail(db, candidate.id)
 
@@ -291,7 +330,7 @@ async def update_candidate(
     data: CandidateUpdateIn,
     user_id: int,
 ) -> CandidateDetailOut:
-    candidate = await _get_or_404(db, candidate_id)
+    candidate = await get_candidate_or_404(db, candidate_id)
     changes = data.model_dump(exclude_unset=True)
     touched = sorted(changes.keys())
 
@@ -319,7 +358,7 @@ async def update_candidate(
         if key != candidate.dedupe_key:
             conflict = (await db.execute(
                 select(Candidate).where(
-                    Candidate.company_id == 1,
+                    Candidate.company_id == candidate.company_id,
                     Candidate.dedupe_key == key,
                     Candidate.id != candidate.id,
                 )
@@ -358,10 +397,14 @@ async def upload_files(
     uploads: list[UploadFile],
     user_id: int,
     applied_job_id: int | None = None,
+    max_file_mb: int | None = None,
 ) -> list[dict]:
     items: list[dict] = []
+    company_id = require_company_id()
     storage = get_storage()
     allowed = settings.allowed_ext_list
+    limit_mb = max_file_mb or settings.MAX_UPLOAD_MB
+    limit_bytes = limit_mb * 1024 * 1024
 
     for upload in uploads:
         name = Path(upload.filename or "resume").name
@@ -378,16 +421,18 @@ async def upload_files(
         if size == 0:
             items.append(_item(name, 0, None, False, RF_FAILED, message="文件为空，请重新上传"))
             continue
-        if size > settings.max_upload_bytes:
+        if size > limit_bytes:
             items.append(_item(
                 name, size, None, False, RF_FAILED,
-                message=f"文件超过 {settings.MAX_UPLOAD_MB}MB，请压缩后重试",
+                message=f"文件超过 {limit_mb}MB，请压缩后重试",
             ))
             continue
 
         sha = hashlib.sha256(data).hexdigest()
         existing = (await db.execute(
-            select(ResumeFile).where(ResumeFile.sha256 == sha)
+            select(ResumeFile).where(
+                ResumeFile.sha256 == sha, ResumeFile.company_id == company_id
+            )
         )).scalars().first()
         if existing is not None:
             items.append(_item(
@@ -398,7 +443,7 @@ async def upload_files(
             ))
             continue
 
-        key = build_object_key(1, "resume", name)
+        key = build_object_key(company_id, "resume", name)
         mime = upload.content_type or mimetypes.guess_type(name)[0] or "application/octet-stream"
         try:
             stored = storage.put(key, data, content_type=mime)
@@ -408,7 +453,7 @@ async def upload_files(
             continue
 
         file = ResumeFile(
-            company_id=1,
+            company_id=company_id,
             bucket=settings.MINIO_BUCKET,
             object_key=key,
             etag=str(stored.get("etag") or "")[:100],
@@ -430,7 +475,9 @@ async def upload_files(
                 await db.flush()
         except IntegrityError:
             existing = (await db.execute(
-                select(ResumeFile).where(ResumeFile.sha256 == sha)
+                select(ResumeFile).where(
+                    ResumeFile.sha256 == sha, ResumeFile.company_id == company_id
+                )
             )).scalars().first()
             if existing is not None:
                 items.append(_item(
@@ -438,7 +485,9 @@ async def upload_files(
                     existing.candidate_id, "文件已存在，复用已有记录", existing.id,
                 ))
                 continue
-            raise
+            logger.warning(f"简历入库冲突且未查到同公司记录 | sha={sha} | company={company_id}")
+            items.append(_item(name, size, sha, False, RF_FAILED, message="文件登记冲突，请稍后重试"))
+            continue
 
         await audit.write_audit(
             db, action="resume.upload", target_type="resume_file",
@@ -470,12 +519,25 @@ async def _mark_failed(db: AsyncSession, file_id: int, reason: str) -> None:
     file = await db.get(ResumeFile, file_id)
     if file is None:
         return
+    # 解析在后台/worker 中执行，需要显式恢复公司上下文（AI 成本、审计、索引都依赖）
+    set_company_id(file.company_id)
     file.status = RF_FAILED
     file.error_reason = reason[:500]
     file.parsed_time = utcnow()
     await audit.write_audit(
         db, action="resume.parse_failed", target_type="resume_file",
         target_id=file.id, user_id=file.uploaded_by, detail={"reason": reason[:500]},
+    )
+    await notification_svc.create_notification(
+        db,
+        user_id=file.uploaded_by,
+        candidate_id=file.candidate_id,
+        template="resume_parse_failed",
+        subject="简历解析失败",
+        body=(
+            f"简历「{file.original_name or '未命名文件'}」解析失败：{reason[:200]}。"
+            "请手动录入或重新上传。"
+        ),
     )
     await db.commit()
 
@@ -485,6 +547,7 @@ async def process_file(
     file = await db.get(ResumeFile, file_id)
     if file is None:
         return
+    set_company_id(file.company_id)
     # 幂等：已解析成功过且已归属候选人的文件不重复解析
     if file.status == RF_SUCCESS and file.candidate_id:
         return
@@ -517,7 +580,7 @@ async def process_file(
         )).scalar() or 0
 
         resume = Resume(
-            company_id=1,
+            company_id=file.company_id,
             candidate_id=candidate.id,
             file_id=file.id,
             structured=payload,
@@ -550,6 +613,17 @@ async def process_file(
                 ],
             },
         )
+        await notification_svc.create_notification(
+            db,
+            user_id=file.uploaded_by,
+            candidate_id=candidate.id,
+            template="resume_parsed",
+            subject="简历解析完成",
+            body=(
+                f"简历「{file.original_name or '未命名文件'}」解析完成，"
+                f"已生成候选人档案：{candidate.name}。"
+            ),
+        )
         await db.commit()
 
         # 解析成功后再写向量索引；失败只记日志，不影响建档结果
@@ -567,6 +641,17 @@ async def process_file(
         await audit.write_audit(
             db, action="resume.parse_failed", target_type="resume_file",
             target_id=file.id, user_id=file.uploaded_by, detail={"reason": str(exc)[:500]},
+        )
+        await notification_svc.create_notification(
+            db,
+            user_id=file.uploaded_by,
+            candidate_id=file.candidate_id,
+            template="resume_parse_failed",
+            subject="简历解析失败",
+            body=(
+                f"简历「{file.original_name or '未命名文件'}」解析失败：{str(exc)[:200]}。"
+                "请手动录入或重新上传。"
+            ),
         )
         await db.commit()
 
@@ -630,7 +715,7 @@ async def _merge_candidate(db: AsyncSession, file: ResumeFile, payload: dict) ->
 
     candidate = (await db.execute(
         select(Candidate).where(
-            Candidate.company_id == 1,
+            Candidate.company_id == file.company_id,
             Candidate.is_deleted.is_(False),
             or_(*conditions),
         )
@@ -638,7 +723,7 @@ async def _merge_candidate(db: AsyncSession, file: ResumeFile, payload: dict) ->
 
     created = False
     if candidate is None:
-        candidate = Candidate(company_id=1, dedupe_key=key, created_by=file.uploaded_by, skills=[])
+        candidate = Candidate(company_id=file.company_id, dedupe_key=key, created_by=file.uploaded_by, skills=[])
         try:
             async with db.begin_nested():
                 db.add(candidate)
@@ -647,7 +732,7 @@ async def _merge_candidate(db: AsyncSession, file: ResumeFile, payload: dict) ->
         except IntegrityError:
             candidate = (await db.execute(
                 select(Candidate).where(
-                    Candidate.company_id == 1,
+                    Candidate.company_id == file.company_id,
                     Candidate.dedupe_key == key,
                     Candidate.is_deleted.is_(False),
                 )
@@ -659,7 +744,7 @@ async def _merge_candidate(db: AsyncSession, file: ResumeFile, payload: dict) ->
     if candidate.dedupe_key != key:
         taken = (await db.execute(
             select(Candidate.id).where(
-                Candidate.company_id == 1,
+                Candidate.company_id == file.company_id,
                 Candidate.dedupe_key == key,
                 Candidate.id != candidate.id,
             )
@@ -733,3 +818,143 @@ async def reparse_file(db: AsyncSession, file_id: int, user_id: int) -> ResumeFi
     )
     await db.commit()
     return file
+
+# ---------------------------------------------------------------- 360° 概览
+async def get_candidate_overview(
+    db: AsyncSession, user, candidate_id: int
+) -> CandidateOverviewOut:
+    """候选人 360°：档案 + 应聘记录 + 匹配结果 + 时间线（按数据范围过滤）"""
+    candidate = await get_candidate_or_404(db, candidate_id)
+    detail = await get_candidate_detail(db, candidate_id)
+
+    # 应聘记录：只保留当前用户有权查看的职位
+    application_rows = (await db.execute(
+        select(Application, Job)
+        .join(Job, Job.id == Application.job_id)
+        .where(Application.candidate_id == candidate.id)
+        .order_by(Application.applied_at.desc(), Application.id.desc())
+    )).all()
+    applications: list[tuple[Application, Job]] = [
+        (application, job)
+        for application, job in application_rows
+        if scope.can_read_job(user, job)
+    ]
+
+    application_ids = [application.id for application, _ in applications]
+    question_counts: dict[int, int] = {}
+    histories: list[ApplicationStageHistory] = []
+    if application_ids:
+        rows = await db.execute(
+            select(InterviewQuestion.application_id, func.count())
+            .where(InterviewQuestion.application_id.in_(application_ids))
+            .group_by(InterviewQuestion.application_id)
+        )
+        question_counts = {app_id: count for app_id, count in rows.all()}
+        histories = list((await db.execute(
+            select(ApplicationStageHistory)
+            .where(ApplicationStageHistory.application_id.in_(application_ids))
+            .order_by(ApplicationStageHistory.create_time.asc())
+        )).scalars().all())
+
+    job_titles = {job.id: job.title for _, job in applications}
+
+    # 匹配结果：同样过滤掉无权查看的职位
+    match_rows = (await db.execute(
+        select(MatchResult, Job)
+        .join(Job, Job.id == MatchResult.job_id)
+        .where(MatchResult.candidate_id == candidate.id)
+        .order_by(MatchResult.score.desc(), MatchResult.id.desc())
+    )).all()
+    matches = [
+        CandidateMatchOut(
+            id=match.id,
+            job_id=match.job_id,
+            job_title=job.title,
+            score=float(match.score),
+            skill_score=match.skill_score,
+            exp_score=match.exp_score,
+            edu_score=match.edu_score,
+            matched_skills=list(match.matched_skills or []),
+            missing_skills=list(match.missing_skills or []),
+            summary=match.summary,
+            feedback=match.feedback,
+            create_time=match.create_time,
+        )
+        for match, job in match_rows
+        if scope.can_read_job(user, job)
+    ]
+
+    timeline: list[CandidateTimelineItemOut] = [
+        CandidateTimelineItemOut(
+            time=candidate.create_time,
+            kind="candidate",
+            title="候选人建档",
+        )
+    ]
+    for file in detail.files:
+        timeline.append(CandidateTimelineItemOut(
+            time=file.create_time,
+            kind="resume",
+            title="上传简历",
+            description=file.original_name,
+        ))
+        if file.parsed_time is not None and file.status == RF_SUCCESS:
+            timeline.append(CandidateTimelineItemOut(
+                time=file.parsed_time,
+                kind="parse",
+                title="简历解析完成",
+                description=f"{file.parser or '规则解析'} · {file.original_name}",
+            ))
+    for application, job in applications:
+        timeline.append(CandidateTimelineItemOut(
+            time=application.applied_at,
+            kind="application",
+            title=f"加入流程 · {job.title}",
+            description=APP_STATUS_LABELS.get(application.status, application.status),
+            application_id=application.id,
+            job_id=job.id,
+        ))
+    for history in histories:
+        from_label = APP_STATUS_LABELS.get(history.from_status or "", "进入流程")
+        to_label = APP_STATUS_LABELS.get(history.to_status, history.to_status)
+        timeline.append(CandidateTimelineItemOut(
+            time=history.create_time,
+            kind="stage",
+            title=f"{from_label} → {to_label}",
+            description=history.note,
+            application_id=history.application_id,
+            job_id=next(
+                (
+                    application.job_id
+                    for application, _ in applications
+                    if application.id == history.application_id
+                ),
+                None,
+            ),
+        ))
+    timeline.sort(key=lambda item: item.time, reverse=True)
+
+    return CandidateOverviewOut(
+        **detail.model_dump(),
+        applications=[
+            CandidateApplicationOut(
+                id=application.id,
+                job_id=application.job_id,
+                job_title=job.title,
+                department=job.department,
+                status=application.status,
+                status_label=APP_STATUS_LABELS.get(application.status, application.status),
+                source=application.source,
+                match_score=float(application.match_score)
+                if application.match_score is not None else None,
+                applied_at=application.applied_at,
+                stage_entered_at=application.stage_entered_at,
+                rejected_reason=application.rejected_reason,
+                hired_at=application.hired_at,
+                question_count=question_counts.get(application.id, 0),
+            )
+            for application, job in applications
+        ],
+        matches=matches,
+        timeline=timeline[:60],
+    )

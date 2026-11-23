@@ -106,3 +106,24 @@ class CostSummaryOut(BaseModel):
     budget_status: str = "ok"
     by_feature: list[FeatureCostOut] = []
     top_jobs: list[JobCostOut] = []
+
+
+# ---------------------------------------------------------------- SLA 监控
+class SlaItemOut(BaseModel):
+    application_id: int
+    job_id: int
+    job_title: str | None = None
+    candidate_id: int
+    candidate_name: str | None = None
+    status: str
+    status_label: str
+    hours_in_stage: float = 0.0
+    limit_hours: int = 0
+    overdue_hours: float = 0.0
+
+
+class SlaOut(BaseModel):
+    thresholds: dict[str, int] = {}
+    total: int = 0
+    items: list[SlaItemOut] = []
+    generated_at: datetime

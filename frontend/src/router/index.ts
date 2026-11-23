@@ -33,6 +33,24 @@ const router = createRouter({
       component: () => import('@/views/CostView.vue'),
     },
     {
+      path: '/admin',
+      name: 'admin',
+      // 管理后台：用户 / 系统配置 / API Key / 审计
+      component: () => import('@/views/AdminView.vue'),
+    },
+    {
+      path: '/company',
+      name: 'company',
+      // 公司设置：邀请码与成员管理（公司管理员）
+      component: () => import('@/views/CompanyView.vue'),
+    },
+    {
+      path: '/platform',
+      name: 'platform',
+      // 平台超管：公司（租户）管理
+      component: () => import('@/views/PlatformView.vue'),
+    },
+    {
       path: '/jobs',
       name: 'jobs',
       component: () => import('@/views/JobsView.vue'),
@@ -41,6 +59,12 @@ const router = createRouter({
       path: '/candidates',
       name: 'candidates',
       component: () => import('@/views/CandidatesView.vue'),
+    },
+    {
+      path: '/candidates/:id',
+      name: 'candidate-detail',
+      // 候选人 360°：档案 / 应聘记录 / 匹配 / 时间线
+      component: () => import('@/views/CandidateDetailView.vue'),
     },
     {
       path: '/talent',
@@ -58,6 +82,33 @@ const router = createRouter({
       name: 'orchestration',
       // 多 Agent 编排：一键评估 + 轨迹面板
       component: () => import('@/views/OrchestrationView.vue'),
+    },
+    {
+      path: '/careers',
+      name: 'careers',
+      // 公开招聘官网入口：需带公司标识，见 /careers/:slug
+      component: () => import('@/views/CareersView.vue'),
+      meta: { public: true },
+    },
+    {
+      path: '/careers/status',
+      name: 'careers-status',
+      // 投递进度查询（CE-02）
+      component: () => import('@/views/CareerStatusView.vue'),
+      meta: { public: true },
+    },
+    {
+      path: '/careers/:slug',
+      name: 'career-list',
+      // 某家公司的公开招聘页
+      component: () => import('@/views/CareersView.vue'),
+      meta: { public: true },
+    },
+    {
+      path: '/careers/:slug/:id',
+      name: 'career-detail',
+      component: () => import('@/views/CareersView.vue'),
+      meta: { public: true },
     },
     {
       path: '/login',

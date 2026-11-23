@@ -56,7 +56,11 @@ def _send_sync(to: str, subject: str, text: str, html: str | None = None) -> Non
             server.login(settings.EMAIL_USERNAME, settings.EMAIL_PASSWORD)
         server.send_message(msg)
     finally:
-        server.quit()
+        # 发送/登录失败时连接可能已被服务端关闭，quit 报错不能覆盖真实异常
+        try:
+            server.quit()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def send_mail(to: str, subject: str, text: str, html: str | None = None) -> bool:

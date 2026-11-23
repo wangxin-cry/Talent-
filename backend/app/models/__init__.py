@@ -24,6 +24,7 @@ from app.models.ai_call import (  # noqa: F401
     AI_STATUS_SUCCESS,
     AiCall,
 )
+from app.models.api_key import ApiKey  # noqa: F401
 from app.models.application import (  # noqa: F401
     APP_HIRED,
     APP_INTERVIEW,
@@ -73,6 +74,16 @@ from app.models.candidate import (  # noqa: F401
     Resume,
     ResumeFile,
 )
+from app.models.company import (  # noqa: F401
+    STATUS_ACTIVE as COMPANY_STATUS_ACTIVE,
+    STATUS_DISABLED as COMPANY_STATUS_DISABLED,
+    Company,
+)
+from app.models.interview import (  # noqa: F401
+    ApplicationTracking,
+    InterviewFeedback,
+    InterviewSchedule,
+)
 from app.models.interview_question import InterviewQuestion  # noqa: F401
 from app.models.job import (  # noqa: F401
     EDUCATION_LEVELS,
@@ -113,22 +124,29 @@ from app.models.skill import (  # noqa: F401
     CATEGORY_TOOL,
     Skill,
 )
+from app.models.system_config import SystemConfig  # noqa: F401
 from app.models.user import (  # noqa: F401
     ROLE_ADMIN,
     ROLE_MANAGER,
     ROLE_RECRUITER,
+    ROLE_SUPERADMIN,
     STATUS_ACTIVE,
+    STATUS_DELETED,
     STATUS_DISABLED,
     User,
 )
 
 __all__ = [
     "IdMixin", "TimestampMixin", "CompanyScopedMixin", "utcnow",
+    "Company", "COMPANY_STATUS_ACTIVE", "COMPANY_STATUS_DISABLED",
+    "ROLE_SUPERADMIN",
     "User", "AuthToken", "Skill", "Job",
     "Candidate", "ResumeFile", "Resume", "AuditLog", "MatchResult",
     "Application", "ApplicationStageHistory", "Notification", "InterviewQuestion",
+    "InterviewSchedule", "InterviewFeedback", "ApplicationTracking",
     "RagChunk", "DOC_RESUME", "DOC_JOB", "DOC_QUESTION", "DOC_TYPE_LABELS",
     "AgentTrace", "ChatSession", "ChatMessage",
+    "ApiKey", "SystemConfig",
     "ROLE_USER", "ROLE_ASSISTANT", "ROLE_SYSTEM",
     "CARD_UPLOAD", "CARD_PARSE_RESULT", "CARD_MATCH_RANK",
     "CARD_INTERVIEW", "CARD_CONFIRM", "CARD_CHART", "CARD_TYPES",
@@ -143,6 +161,7 @@ __all__ = [
     "CATEGORY_LANGUAGE", "CATEGORY_FRAMEWORK", "CATEGORY_DATABASE",
     "CATEGORY_MIDDLEWARE", "CATEGORY_TOOL", "CATEGORY_SOFT",
     "ROLE_RECRUITER", "ROLE_MANAGER", "ROLE_ADMIN", "STATUS_ACTIVE", "STATUS_DISABLED",
+    "STATUS_DELETED",
     "PURPOSE_VERIFY_EMAIL", "PURPOSE_RESET_PASSWORD",
     "APP_NEW", "APP_SCREENING", "APP_INTERVIEW", "APP_OFFER", "APP_HIRED", "APP_REJECTED",
     "APP_STATUSES", "APP_STATUS_LABELS", "APP_TRANSITIONS",

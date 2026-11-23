@@ -28,7 +28,13 @@ def _auth(client, email_capture, suffix: str) -> dict[str, str]:
     email = f"{name}@example.com"
     resp = client.post(
         f"{PREFIX}/auth/register",
-        json={"name": name, "email": email, "password": "Passw0rd!"},
+        json={
+            "name": name,
+            "email": email,
+            "password": "Passw0rd!",
+            "mode": "join",
+            "invite_code": "TESTJOIN",
+        },
     )
     assert resp.status_code == 201, resp.text
     token = email_capture["verify"][-1].split("token=", 1)[1]
@@ -129,6 +135,11 @@ def test_funnel_counts_reached_not_current(client, email_capture):
     headers = _auth(client, email_capture, "funnel")
     job_id = _job(client, headers)
 
+    before = {
+        stage["status"]: stage
+        for stage in client.get(f"{PREFIX}/analytics/dashboard", headers=headers).json()["funnel"]
+    }
+
     a1 = _application(client, headers, job_id, _candidate(client, headers, "候选人A"))
     a2 = _application(client, headers, job_id, _candidate(client, headers, "候选人B"))
     a3 = _application(client, headers, job_id, _candidate(client, headers, "候选人C"))
@@ -141,22 +152,27 @@ def test_funnel_counts_reached_not_current(client, email_capture):
     data = client.get(f"{PREFIX}/analytics/dashboard", headers=headers).json()
     funnel = {stage["status"]: stage for stage in data["funnel"]}
 
-    assert funnel["new"]["count"] == 3          # 到达过 new 的 3 人
-    assert funnel["screening"]["count"] == 2    # 到达过 screening 的 2 人
-    assert funnel["interview"]["count"] == 1    # 到达过 interview 的 1 人
+    # 看板是公司级口径，断言本次新增带来的增量，避免受其它用例数据影响
+    assert funnel["new"]["count"] - before["new"]["count"] == 3
+    assert funnel["screening"]["count"] - before["screening"]["count"] == 2
+    assert funnel["interview"]["count"] - before["interview"]["count"] == 1
 
     # 当前停留口径单独给出，便于前端展示两种视角
-    assert funnel["new"]["current"] == 1
-    assert funnel["screening"]["current"] == 1
-    assert funnel["interview"]["current"] == 1
+    assert funnel["new"]["current"] - before["new"]["current"] == 1
+    assert funnel["screening"]["current"] - before["screening"]["current"] == 1
+    assert funnel["interview"]["current"] - before["interview"]["current"] == 1
 
     # 漏斗单调不增
     counts = [funnel[s]["count"] for s in ("new", "screening", "interview", "offer", "hired")]
     assert counts == sorted(counts, reverse=True), counts
 
     # 转化率相对上一阶段
-    assert funnel["screening"]["conversion"] == round(2 / 3, 4)
-    assert funnel["interview"]["conversion"] == round(1 / 2, 4)
+    assert funnel["screening"]["conversion"] == round(
+        funnel["screening"]["count"] / funnel["new"]["count"], 4
+    )
+    assert funnel["interview"]["conversion"] == round(
+        funnel["interview"]["count"] / funnel["screening"]["count"], 4
+    )
 
 
 def test_overview_matches_database(client, email_capture):

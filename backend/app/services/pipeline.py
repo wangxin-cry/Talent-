@@ -30,6 +30,7 @@ from app.models.candidate import Candidate, Resume
 from app.models.job import Job
 from app.models.match_result import MatchResult
 from app.models.user import User
+from app.core.tenant import get_company_id, require_company_id
 from app.schemas.application import (
     ApplicationCardOut,
     ApplicationDetailOut,
@@ -56,7 +57,10 @@ def _days_in_stage(stage_entered_at) -> int:
 
 async def get_application_or_404(db: AsyncSession, application_id: int) -> Application:
     application = await db.get(Application, application_id)
-    if application is None:
+    current_company = get_company_id()
+    if application is None or (
+        current_company is not None and application.company_id != current_company
+    ):
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND, detail="应聘记录不存在"
         )
@@ -236,11 +240,16 @@ async def create_application(
     db: AsyncSession, data, user_id: int
 ) -> ApplicationDetailOut:
     job = await db.get(Job, data.job_id)
-    if job is None:
+    company_id = require_company_id()
+    if job is None or job.company_id != company_id:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="职位不存在")
 
     candidate = await db.get(Candidate, data.candidate_id)
-    if candidate is None or candidate.is_deleted:
+    if (
+        candidate is None
+        or candidate.is_deleted
+        or candidate.company_id != company_id
+    ):
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="候选人不存在")
 
     existing = (
@@ -279,7 +288,7 @@ async def create_application(
         applied_at=now,
         stage_entered_at=now,
         created_by=user_id,
-        company_id=1,
+        company_id=job.company_id,
     )
     db.add(application)
     await db.flush()
@@ -375,6 +384,10 @@ async def change_status(
 
     await db.commit()
     await db.refresh(application)
+    # 提交后再发候选人邮件：邮件失败不影响状态流转结果
+    await notification_svc.notify_candidate_status(
+        db, application=application, to_status=target, note=reason or None
+    )
     return await build_detail(db, application)
 
 

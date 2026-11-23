@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.scoring_config import SCORING_VERSION
 from app.core.security import sha256_hex
+from app.core.tenant import require_company_id
 from app.models.candidate import Candidate, Resume
 from app.models.job import Job
 from app.models.match_result import MatchResult
@@ -36,7 +37,10 @@ def _fingerprint(job_version: int, resume_hash: str | None) -> str:
 
 async def _load_candidates(db: AsyncSession) -> list[Candidate]:
     result = await db.execute(
-        select(Candidate).where(Candidate.is_deleted.is_(False))
+        select(Candidate).where(
+            Candidate.is_deleted.is_(False),
+            Candidate.company_id == require_company_id(),
+        )
     )
     return list(result.scalars().all())
 

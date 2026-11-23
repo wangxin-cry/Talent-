@@ -61,6 +61,58 @@ async def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_compat_columns)
+
+
+def _ensure_compat_columns(sync_conn) -> None:
+    """create_all 不会给已有表补列；这里做最小的兼容迁移"""
+    from sqlalchemy import inspect
+
+    inspector = inspect(sync_conn)
+    tables = inspector.get_table_names()
+    if "user" not in tables:
+        return
+    columns = {column["name"] for column in inspector.get_columns("user")}
+    for column, ddl in {
+        "department": "department VARCHAR(100)",
+        "nickname": "nickname VARCHAR(50)",
+        "bio": "bio VARCHAR(255)",
+        "avatar_key": "avatar_key VARCHAR(500)",
+        "company_id": "company_id BIGINT",
+    }.items():
+        if column not in columns:
+            sync_conn.execute(text(f'ALTER TABLE "user" ADD COLUMN {ddl}'))
+
+    # 多租户改造：存量普通用户归入默认公司；平台超管不隶属任何公司
+    sync_conn.execute(
+        text(
+            "UPDATE \"user\" SET company_id = 1 "
+            "WHERE company_id IS NULL AND role <> 'superadmin'"
+        )
+    )
+    sync_conn.execute(
+        text("UPDATE \"user\" SET company_id = NULL WHERE role = 'superadmin'")
+    )
+    if sync_conn.dialect.name == "postgresql":
+        sync_conn.execute(
+            text('ALTER TABLE "user" ALTER COLUMN company_id DROP NOT NULL')
+        )
+    sync_conn.execute(text('CREATE INDEX IF NOT EXISTS ix_user_department ON "user" (department)'))
+    sync_conn.execute(
+        text('CREATE INDEX IF NOT EXISTS ix_user_company_role ON "user" (company_id, role)')
+    )
+
+    # 简历文件判重改为「公司内唯一」：同一份文件允许被不同公司各自收录
+    if "resume_file" in tables and sync_conn.dialect.name == "postgresql":
+        sync_conn.execute(
+            text('ALTER TABLE resume_file DROP CONSTRAINT IF EXISTS uq_resume_file_sha256')
+        )
+        sync_conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_resume_file_company_sha "
+                "ON resume_file (company_id, sha256)"
+            )
+        )
 
 
 async def check_db() -> tuple[bool, str]:

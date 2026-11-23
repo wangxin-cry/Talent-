@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.database import Base
+from app.core.tenant import reset_company_id, set_company_id
 from app.models.base import utcnow  # noqa: F401  （确保模型模块已加载）
 from app.models.candidate import Candidate
 from app.models.job import Job
@@ -207,6 +208,7 @@ def _run_cache_scenario(db_path: str) -> tuple[int, int, int, int, int]:
         )
         try:
             async with session_factory() as db:
+                set_company_id(1)
                 job = Job(
                     title="Python 后端工程师",
                     must_have_skills=[],
@@ -255,6 +257,7 @@ def _run_cache_scenario(db_path: str) -> tuple[int, int, int, int, int]:
                     rows_after or 0,
                 )
         finally:
+            reset_company_id()
             await engine.dispose()
 
     return asyncio.run(scenario())

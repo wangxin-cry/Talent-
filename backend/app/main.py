@@ -9,27 +9,36 @@ TalentMatch 后端入口
 """
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.admin import router as admin_router
 from app.api.v1.analytics import router as analytics_router
+from app.api.v1.api_keys import router as api_keys_router
 from app.api.v1.applications import router as applications_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.health import router as health_router
+from app.api.v1.interviews import router as interviews_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.notifications import router as notifications_router
 from app.api.v1.orchestration import router as orchestration_router
+from app.api.v1.public import router as public_router
 from app.api.v1.rag import router as rag_router
 from app.api.v1.skills import router as skills_router
 from app.api.v1.candidates import router as candidates_router
 from app.api.v1.chat import router as chat_router
+from app.api.v1.company import router as company_router
 from app.api.v1.matching import router as matching_router
+from app.api.v1.platform import router as platform_router
 from app.core.config import settings
-from app.core.database import close_db, init_db
+from app.core.database import SessionLocal, close_db, init_db
 from app.core.logging import logger, setup_logging
+from app.core.rate_limit import RateLimitMiddleware
+from app.services import company as company_service
 
 
 @asynccontextmanager
@@ -41,7 +50,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"对象存储: {settings.STORAGE_BACKEND}")
 
     await init_db()
-    logger.info("数据库初始化完成（表已就绪）")
+    async with SessionLocal() as session:
+        await company_service.ensure_default_company(session)
+    logger.info("数据库初始化完成（表与默认公司已就绪）")
 
     yield
 
@@ -69,7 +80,8 @@ app.add_middleware(
     expose_headers=["X-Process-Time"],
 )
 
-app.include_router(candidates_router, prefix=settings.API_PREFIX)
+# 全局限流（PRD §8.3）：每用户 100 次/分钟，超限返回 429
+app.add_middleware(RateLimitMiddleware)
 
 @app.middleware("http")
 async def add_process_time(request: Request, call_next):
@@ -116,11 +128,17 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 # ---------------------------------------------------------------- 路由
 app.include_router(health_router, prefix=settings.API_PREFIX)
 app.include_router(auth_router, prefix=settings.API_PREFIX)
+app.include_router(company_router, prefix=settings.API_PREFIX)
+app.include_router(platform_router, prefix=settings.API_PREFIX)
 app.include_router(admin_router, prefix=settings.API_PREFIX)
+app.include_router(api_keys_router, prefix=settings.API_PREFIX)
 app.include_router(jobs_router, prefix=settings.API_PREFIX)
 app.include_router(skills_router, prefix=settings.API_PREFIX)
+app.include_router(candidates_router, prefix=settings.API_PREFIX)
 app.include_router(matching_router, prefix=settings.API_PREFIX)
 app.include_router(applications_router, prefix=settings.API_PREFIX)
+app.include_router(interviews_router, prefix=settings.API_PREFIX)
+app.include_router(public_router, prefix=settings.API_PREFIX)
 app.include_router(notifications_router, prefix=settings.API_PREFIX)
 app.include_router(analytics_router, prefix=settings.API_PREFIX)
 app.include_router(rag_router, prefix=settings.API_PREFIX)
@@ -129,10 +147,41 @@ app.include_router(chat_router, prefix=settings.API_PREFIX)
 
 
 @app.get("/", tags=["系统"], summary="根路径")
-async def root() -> dict:
+async def root():
+    if _SPA_INDEX is not None:
+        return FileResponse(_SPA_INDEX)
     return {
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "docs": "/docs",
         "health": f"{settings.API_PREFIX}/healthz",
     }
+
+
+# ---------------------------------------------------------------- 前端静态托管
+# 开启 SERVE_FRONTEND 后，构建产物由后端同端口托管（生产单进程部署）；
+# /api、/docs 等仍走各自的接口，其余路径回退到 index.html 支持前端路由。
+def _resolve_dist() -> Path:
+    if settings.FRONTEND_DIST:
+        return Path(settings.FRONTEND_DIST)
+    return Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+
+_SPA_INDEX: Path | None = None
+if settings.SERVE_FRONTEND:
+    _dist = _resolve_dist()
+    if (_dist / "index.html").exists():
+        _SPA_INDEX = _dist / "index.html"
+        if (_dist / "assets").exists():
+            app.mount("/assets", StaticFiles(directory=_dist / "assets"), name="assets")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str):
+            if full_path.startswith(("api/", "docs", "redoc", "openapi.json")):
+                raise HTTPException(status_code=404, detail="Not Found")
+            candidate = _dist / full_path
+            if full_path and candidate.is_file():
+                return FileResponse(candidate)
+            return FileResponse(_SPA_INDEX)
+    else:
+        logger.warning(f"未找到前端构建产物：{_dist}，请先执行 npm run build")

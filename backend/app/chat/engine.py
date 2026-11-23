@@ -42,13 +42,14 @@ from app.models.chat import (
     ChatSession,
 )
 from app.models.job import Job
-from app.models.user import ROLE_ADMIN, ROLE_MANAGER
+from app.models.user import ROLE_ADMIN, ROLE_MANAGER, User
 from app.schemas.chat import ChatMessageOut, ChatSendIn, ChatSessionOut
 from app.schemas.orchestration import OrchestrationRunIn
 from app.services import analytics as analytics_svc
 from app.services import candidates as candidates_svc
 from app.services import job as job_svc
 from app.services import pipeline
+from app.services import scope
 
 WELCOME_CHIPS = [
     {"label": "📥 我传了一批简历", "text": "我传了一批简历"},
@@ -699,10 +700,10 @@ async def _execute(
         return await _run_analytics(db, execution, payload, user)
 
     if intent == "search_candidates":
-        return await _run_search(db, decision)
+        return await _run_search(db, decision, user)
 
     if intent == "application_status":
-        return await _run_application_status(db, decision)
+        return await _run_application_status(db, decision, user)
 
     execution.messages = [
         PlannedMessage(text="我还没学会这个操作，可以先试试：匹配、出面试题、查数据。")
@@ -1108,9 +1109,11 @@ async def _run_analytics(
     return execution
 
 
-async def _run_search(db: AsyncSession, decision: nlu.Decision) -> Execution:
+async def _run_search(db: AsyncSession, decision: nlu.Decision, user: User) -> Execution:
     slots = decision.slots
-    rows, _ = await candidates_svc.list_candidates(db, limit=50)
+    rows, _ = await candidates_svc.list_candidates(
+        db, limit=50, scope=scope.candidate_scope_condition(user)
+    )
     skills = [value.lower() for value in (slots.get("skills") or [])]
     min_years = slots.get("min_years")
     matched = []
@@ -1149,9 +1152,12 @@ async def _run_search(db: AsyncSession, decision: nlu.Decision) -> Execution:
     )
 
 
-async def _run_application_status(db: AsyncSession, decision: nlu.Decision) -> Execution:
+async def _run_application_status(
+    db: AsyncSession, decision: nlu.Decision, user: User
+) -> Execution:
     slots = decision.slots
     application = await pipeline.get_application_or_404(db, slots["application_id"])
+    await scope.ensure_application_access(db, user, application)
     detail = await pipeline.build_detail(db, application)
     text = (
         f"{detail.candidate_name or '该候选人'}（{detail.job_title or '职位'}）：\n"

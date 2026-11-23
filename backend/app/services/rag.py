@@ -9,6 +9,7 @@ RAG 知识增强服务（阶段八）
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 
@@ -24,9 +25,21 @@ from app.models.interview_question import InterviewQuestion
 from app.models.job import Job, STATUS_ARCHIVED
 from app.models.rag_chunk import DOC_JOB, DOC_QUESTION, DOC_RESUME, RagChunk
 from app.models.skill import Skill
+from app.core.tenant import get_company_id, require_company_id, set_company_id
 from app.services import embeddings, vector_store
 
-COMPANY_ID = 1
+# 同一进程内按「文档类型 + 来源」串行化索引：
+# 同时上传多份简历可能归并到同一个候选人，两个后台任务并发写切片会撞唯一键
+_INDEX_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _scope_lock(doc_type: str, source_id: int) -> asyncio.Lock:
+    key = f"{doc_type}:{source_id}"
+    lock = _INDEX_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _INDEX_LOCKS[key] = lock
+    return lock
 
 _PHONE_RE = re.compile(r"1[3-9]\d{9}")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
@@ -257,12 +270,13 @@ async def _sync_scope(
     source_id: int,
     chunks: list[Chunk],
 ) -> int:
+    # 注意：这里要连"逻辑删除"的行一起查。chunk_key 是全局唯一键，
+    # 只查 is_deleted=False 会让已软删的行挡住重新插入，触发唯一键冲突。
     existing_rows = (
         await db.execute(
             select(RagChunk).where(
                 RagChunk.doc_type == doc_type,
                 RagChunk.source_id == source_id,
-                RagChunk.is_deleted.is_(False),
             )
         )
     ).scalars().all()
@@ -304,12 +318,13 @@ async def _sync_scope(
                 chunk_key=chunk.key,
                 content=chunk.content,
                 chunk_meta=chunk.meta,
-                company_id=COMPANY_ID,
+                company_id=require_company_id(),
             )
             db.add(row)
         else:
             row.content = chunk.content
             row.chunk_meta = chunk.meta
+            row.is_deleted = False
         await db.flush()
         upsert_ids.append(row.id)
         upsert_vectors.append(vector)
@@ -328,57 +343,78 @@ async def _sync_scope(
 async def index_resume(db: AsyncSession, candidate_id: int) -> int:
     if not _enabled_for_index():
         return 0
-    candidate = await db.get(Candidate, candidate_id)
-    if candidate is None or candidate.is_deleted:
-        return 0
-    resume = (
-        await db.execute(
-            select(Resume)
-            .where(Resume.candidate_id == candidate_id, Resume.is_primary.is_(True))
-            .order_by(Resume.version.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    chunks = _chunk_resume(candidate, resume)
-    try:
-        return await _sync_scope(db, DOC_RESUME, candidate_id, chunks)
-    except RAGUnavailable:
-        return 0
+    async with _scope_lock(DOC_RESUME, candidate_id):
+        try:
+            candidate = await db.get(Candidate, candidate_id)
+            if candidate is None or candidate.is_deleted:
+                return 0
+            set_company_id(candidate.company_id)
+            resume = (
+                await db.execute(
+                    select(Resume)
+                    .where(Resume.candidate_id == candidate_id, Resume.is_primary.is_(True))
+                    .order_by(Resume.version.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            chunks = _chunk_resume(candidate, resume)
+            return await _sync_scope(db, DOC_RESUME, candidate_id, chunks)
+        except RAGUnavailable:
+            return 0
+        except Exception as exc:  # 索引失败不能污染调用方的 session
+            await db.rollback()
+            logger.warning("简历索引失败 candidate_id={}：{}", candidate_id, exc)
+            return 0
 
 
 async def index_job(db: AsyncSession, job_id: int) -> int:
     if not _enabled_for_index():
         return 0
-    job = await db.get(Job, job_id)
-    if job is None:
-        return 0
-    skill_map = await _load_skill_names(
-        db, list(set([*(job.must_have_skills or []), *(job.skills or [])]))
-    )
-    must_names = [skill_map[i] for i in (job.must_have_skills or []) if i in skill_map]
-    skill_names = [skill_map[i] for i in (job.skills or []) if i in skill_map]
-    chunks = _chunk_job(job, skill_names, must_names)
-    try:
-        return await _sync_scope(db, DOC_JOB, job.id, chunks)
-    except RAGUnavailable:
-        return 0
+    async with _scope_lock(DOC_JOB, job_id):
+        try:
+            job = await db.get(Job, job_id)
+            if job is None:
+                return 0
+            set_company_id(job.company_id)
+            skill_map = await _load_skill_names(
+                db, list(set([*(job.must_have_skills or []), *(job.skills or [])]))
+            )
+            must_names = [skill_map[i] for i in (job.must_have_skills or []) if i in skill_map]
+            skill_names = [skill_map[i] for i in (job.skills or []) if i in skill_map]
+            chunks = _chunk_job(job, skill_names, must_names)
+            return await _sync_scope(db, DOC_JOB, job.id, chunks)
+        except RAGUnavailable:
+            return 0
+        except Exception as exc:
+            await db.rollback()
+            logger.warning("职位索引失败 job_id={}：{}", job_id, exc)
+            return 0
 
 
 async def index_questions(db: AsyncSession, application_id: int) -> int:
     if not _enabled_for_index():
         return 0
-    rows = (
-        await db.execute(
-            select(InterviewQuestion)
-            .where(InterviewQuestion.application_id == application_id)
-            .order_by(InterviewQuestion.sort_order.asc(), InterviewQuestion.id.asc())
-        )
-    ).scalars().all()
-    chunks = _chunk_questions(application_id, list(rows))
-    try:
-        return await _sync_scope(db, DOC_QUESTION, application_id, chunks)
-    except RAGUnavailable:
-        return 0
+    async with _scope_lock(DOC_QUESTION, application_id):
+        try:
+            application = await db.get(Application, application_id)
+            if application is None:
+                return 0
+            set_company_id(application.company_id)
+            rows = (
+                await db.execute(
+                    select(InterviewQuestion)
+                    .where(InterviewQuestion.application_id == application_id)
+                    .order_by(InterviewQuestion.sort_order.asc(), InterviewQuestion.id.asc())
+                )
+            ).scalars().all()
+            chunks = _chunk_questions(application_id, list(rows))
+            return await _sync_scope(db, DOC_QUESTION, application_id, chunks)
+        except RAGUnavailable:
+            return 0
+        except Exception as exc:
+            await db.rollback()
+            logger.warning("面试题索引失败 application_id={}：{}", application_id, exc)
+            return 0
 
 
 async def index_resume_task(candidate_id: int) -> None:
@@ -477,8 +513,11 @@ async def search_resumes(
 
     grouped: dict[int, dict] = {}
     chunk_rows: dict[int, list[RagChunk]] = {}
+    company_id = get_company_id()
+    if company_id is None:
+        return []
     for row in rows:
-        if row.company_id != COMPANY_ID:
+        if row.company_id != company_id:
             continue
         candidate_id = row.source_id
         if exclude_candidate_id is not None and candidate_id == exclude_candidate_id:
@@ -731,10 +770,10 @@ async def reindex_all(db: AsyncSession, scope: str = "all", rebuild: bool = Fals
             )
             rebuild = True
 
+    company_id = require_company_id()
+
     if rebuild:
-        # scope 用的是复数（resumes/jobs/questions），doc_type 是单数（resume/job/question），
-        # 两者不能混用：早期实现直接把 scope 当 doc_type 用，导致 rebuild 时
-        # reset/delete 打了空集合，向量与元数据都没被清掉，重建实际不生效。
+        # 租户隔离：只清当前公司的切片与向量，不能 reset 全局索引
         scope_to_doc = {
             "resumes": DOC_RESUME,
             "jobs": DOC_JOB,
@@ -746,29 +785,53 @@ async def reindex_all(db: AsyncSession, scope: str = "all", rebuild: bool = Fals
             mapped = scope_to_doc.get(scope)
             targets = [mapped] if mapped else []
         for doc_type in targets:
-            await vector_store.reset(doc_type)
-            await db.execute(delete(RagChunk).where(RagChunk.doc_type == doc_type))
+            stale_ids = (
+                await db.execute(
+                    select(RagChunk.id).where(
+                        RagChunk.doc_type == doc_type, RagChunk.company_id == company_id
+                    )
+                )
+            ).scalars().all()
+            if stale_ids:
+                await vector_store.remove(doc_type, list(stale_ids))
+            await db.execute(
+                delete(RagChunk).where(
+                    RagChunk.doc_type == doc_type, RagChunk.company_id == company_id
+                )
+            )
         await db.commit()
 
     counts = {"resume": 0, "job": 0, "question": 0}
 
     if scope in ("all", "resumes"):
         candidate_ids = (
-            await db.execute(select(Candidate.id).where(Candidate.is_deleted.is_(False)))
+            await db.execute(
+                select(Candidate.id).where(
+                    Candidate.is_deleted.is_(False), Candidate.company_id == company_id
+                )
+            )
         ).scalars().all()
         for candidate_id in candidate_ids:
             counts["resume"] += await index_resume(db, candidate_id)
 
     if scope in ("all", "jobs"):
         job_ids = (
-            await db.execute(select(Job.id).where(Job.status != STATUS_ARCHIVED))
+            await db.execute(
+                select(Job.id).where(
+                    Job.status != STATUS_ARCHIVED, Job.company_id == company_id
+                )
+            )
         ).scalars().all()
         for job_id in job_ids:
             counts["job"] += await index_job(db, job_id)
 
     if scope in ("all", "questions"):
         application_ids = (
-            await db.execute(select(InterviewQuestion.application_id).distinct())
+            await db.execute(
+                select(InterviewQuestion.application_id)
+                .where(InterviewQuestion.company_id == company_id)
+                .distinct()
+            )
         ).scalars().all()
         for application_id in application_ids:
             counts["question"] += await index_questions(db, application_id)
